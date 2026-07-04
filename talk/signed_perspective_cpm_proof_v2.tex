@@ -1,0 +1,386 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,mathtools}
+\usepackage{enumitem}
+\usepackage{hyperref}
+
+\theoremstyle{plain}
+\newtheorem{theorem}{Theorem}[section]
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{definition}
+\newtheorem{definition}[theorem]{Definition}
+\newtheorem{example}[theorem]{Example}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+
+\DeclareMathOperator{\interior}{int}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\one}{\mathbf 1}
+\newcommand{\DeltaN}{\Delta^{n-1}}
+
+\title{Signed-perspective coherence-preserving maps}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We introduce a signed-perspective class of coherence-preserving maps on finite gamble spaces.  Given a strictly positive probability vector $q$ and coordinatewise signed concave generators $\rho_i$, the score is
+\[
+\Phi_i(g)=(q\cdot g)\rho_i\!\left(\frac{g_i}{q\cdot g}\right),
+\qquad q\cdot g>0.
+\]
+The signed-concavity hypotheses imply continuity, positive homogeneity, coordinatewise sign preservation, and coherence preservation for pullbacks of every compact family of strictly desirable halfspaces.  The proof is the same sublinearity argument as in the perspective-generator construction: for every output probability $p$, the scalar pullback $-p\cdot\Phi$ is a convex homogeneous sum of perspective terms.  Injectivity is independent of the CPM property and is characterised by a projective injectivity condition on the slice $q\cdot t=1$; a simple sufficient condition is strict monotonicity of every generator.  The older perspective family is recovered as the special case $\rho_i(t)=t-\psi_i(t)$, where positive coordinates are copied exactly.
+\end{abstract}
+
+\section{Setup}
+
+Fix $n\ge 2$ and identify the gamble space with $\R^n$. Let
+\[
+\DeltaN:=\Bigl\{p\in\R^n_{\ge 0}:\sum_i p_i=1\Bigr\},
+\qquad
+\interior\DeltaN:=\{p\in\DeltaN:p_i>0\ \forall i\}.
+\]
+For $p\in\DeltaN$ set
+\[
+D_p:=(\R^n_{\ge 0}\setminus\{0\})\cup\{h\in\R^n:p\cdot h>0\}.
+\]
+For a nonempty $P\subseteq\DeltaN$ define $D_P:=\bigcap_{p\in P}D_p$.
+A set $D\subseteq\R^n$ is a coherent set of strictly desirable gambles if:
+\begin{enumerate}[label=(D\arabic*)]
+\item $\R^n_{\ge0}\setminus\{0\}\subseteq D$;
+\item $D\cap\R^n_{\le0}=\varnothing$;
+\item if $g,h\in D$ and $\lambda,\mu>0$, then $\lambda g+\mu h\in D$;
+\item if $g\in D\setminus\R^n_{\ge0}$, then there exists $\delta>0$ such that $g-\delta\one\in D$.
+\end{enumerate}
+
+\section{Signed concave generators}
+
+\begin{definition}[Signed concave generator family]
+Fix $q\in\interior\DeltaN$. A family $\rho=(\rho_1,\ldots,\rho_n)$ is a signed concave generator family if, for each $i$,
+\begin{enumerate}[label=(S\arabic*)]
+\item $\rho_i:\R\to\R$ is finite and concave;
+\item $\rho_i(0)=0$;
+\item $\rho_i(t)>0$ for $t>0$, and $\rho_i(t)<0$ for $t<0$.
+\end{enumerate}
+\end{definition}
+
+Since each $\rho_i$ is finite and concave on $\R$, it is continuous. Define the open halfspace
+\[
+G_q^+:=\{g\in\R^n:q\cdot g>0\}.
+\]
+The signed-perspective score associated with $(q,\rho)$ is the map
+\[
+\Phi_i(g):=(q\cdot g)\rho_i\!\left(\frac{g_i}{q\cdot g}\right),
+\qquad g\in G_q^+,
+\quad i=1,\ldots,n.
+\]
+All preimages below are domain-relative: for $A\subseteq\R^n$,
+\[
+\Phi^{-1}(A):=\{g\in G_q^+:\Phi(g)\in A\}.
+\]
+
+\section{Basic properties}
+
+\begin{lemma}[Continuity, homogeneity, and sign preservation]
+The map $\Phi:G_q^+\to\R^n$ is continuous and positively homogeneous of degree one. Moreover, for every $g\in G_q^+$ and every coordinate $i$,
+\[
+\operatorname{sgn}\Phi_i(g)=\operatorname{sgn}g_i.
+\]
+In particular,
+\[
+\Phi(G_q^+)\subseteq \R^n\setminus\R^n_{\le0}.
+\]
+Also $\R^n_{\ge0}\setminus\{0\}\subseteq G_q^+$ and $\Phi$ sends every nonzero partial gain to a nonzero partial gain with the same zero pattern.
+\end{lemma}
+
+\begin{proof}
+Continuity follows from continuity of the $\rho_i$ and positivity of $q\cdot g$ on $G_q^+$. If $c>0$, then
+\[
+q\cdot(cg)=c(q\cdot g),
+\qquad
+\frac{(cg)_i}{q\cdot(cg)}=\frac{g_i}{q\cdot g},
+\]
+so $\Phi_i(cg)=c\Phi_i(g)$.
+Since $q\cdot g>0$, the sign of $\Phi_i(g)$ is the sign of $\rho_i(g_i/(q\cdot g))$, which by (S2)--(S3) is exactly the sign of $g_i$. If $g\in G_q^+$, then some coordinate of $g$ is positive, hence the corresponding coordinate of $\Phi(g)$ is positive; so $\Phi(g)\notin\R^n_{\le0}$. Finally, if $g\in\R^n_{\ge0}\setminus\{0\}$, then $q\cdot g>0$ because $q\in\interior\DeltaN$, and the sign assertion gives $\Phi(g)\in\R^n_{\ge0}\setminus\{0\}$ with precisely the same zero coordinates as $g$.
+\end{proof}
+
+\section{The CPM theorem}
+
+For $p\in\DeltaN$ define
+\[
+G_p(g):=-p\cdot\Phi(g)
+=-\sum_{i=1}^n p_i(q\cdot g)\rho_i\!\left(\frac{g_i}{q\cdot g}\right),
+\qquad g\in G_q^+.
+\]
+
+\begin{lemma}[Sublinearity of the scalar pullbacks]
+For every $p\in\DeltaN$, the function $G_p:G_q^+\to\R$ is convex and positively homogeneous of degree one. Consequently it is subadditive on $G_q^+$:
+\[
+G_p(g+h)\le G_p(g)+G_p(h),
+\qquad g,h\in G_q^+.
+\]
+\end{lemma}
+
+\begin{proof}
+Set $\eta_i:=-\rho_i$. Since $\rho_i$ is concave, $\eta_i$ is convex. The perspective
+\[
+(u,s)\longmapsto s\eta_i(u/s),\qquad s>0,
+\]
+is convex on $\R\times\R_{>0}$. Composing it with the affine map
+\[
+g\longmapsto (g_i,q\cdot g)
+\]
+gives convexity of
+\[
+g\longmapsto (q\cdot g)\eta_i\!\left(\frac{g_i}{q\cdot g}\right)
+\]
+on $G_q^+$. Since $p_i\ge0$, $G_p$ is a nonnegative weighted sum of these convex terms. Thus $G_p$ is convex. Positive homogeneity follows directly from the definition of $\Phi$ and the positive homogeneity of $\Phi$. A convex positively homogeneous function of degree one is subadditive: for $g,h\in G_q^+$,
+\[
+G_p(g+h)=2G_p\!\left(\frac{g+h}{2}\right)
+\le 2\left(\frac{G_p(g)}{2}+\frac{G_p(h)}{2}\right)
+=G_p(g)+G_p(h).
+\]
+\end{proof}
+
+For $p\in\DeltaN$ put
+\[
+K_p:=\{g\in G_q^+:G_p(g)<0\}=
+\{g\in G_q^+:p\cdot\Phi(g)>0\}.
+\]
+
+\begin{lemma}[Single-halfspace pullback]
+For every $p\in\DeltaN$,
+\[
+\Phi^{-1}(D_p)=
+(\R^n_{\ge0}\setminus\{0\})\cup K_p.
+\]
+\end{lemma}
+
+\begin{proof}
+If $g\in\R^n_{\ge0}\setminus\{0\}$, then $g\in G_q^+$ and $\Phi(g)\in\R^n_{\ge0}\setminus\{0\}$, so $g\in\Phi^{-1}(D_p)$.
+If $g\notin\R^n_{\ge0}$ and $g\in G_q^+$, then some coordinate of $g$ is negative; by strict sign preservation the same coordinate of $\Phi(g)$ is negative, so $\Phi(g)$ is not a partial gain. Hence $\Phi(g)\in D_p$ iff $p\cdot\Phi(g)>0$, which is exactly $g\in K_p$. Points outside $G_q^+$ are outside the domain of $\Phi$ and hence outside the preimage.
+\end{proof}
+
+\begin{theorem}[Signed-perspective CPM theorem]
+Let $q\in\interior\DeltaN$ and let $\rho$ be a signed concave generator family. For every nonempty compact set $P\subseteq\DeltaN$, the pullback
+\[
+\Phi^{-1}(D_P)=\bigcap_{p\in P}\Phi^{-1}(D_p)
+\]
+is a coherent set of strictly desirable gambles.
+\end{theorem}
+
+\begin{proof}
+By the previous lemma,
+\[
+\Phi^{-1}(D_P)
+=(\R^n_{\ge0}\setminus\{0\})\cup\bigcap_{p\in P}K_p.
+\]
+We verify the four axioms.
+
+(D1) If $g\in\R^n_{\ge0}\setminus\{0\}$, then $g$ belongs to the displayed partial-gain part.
+
+(D2) If $g\in\R^n_{\le0}$, then $q\cdot g\le0$ because $q>0$. Thus $g\notin G_q^+$. Also $g\notin\R^n_{\ge0}\setminus\{0\}$, either because $g=0$ or because $g$ has a negative coordinate. Hence $g\notin\Phi^{-1}(D_P)$.
+
+(D3) Let $g,h\in\Phi^{-1}(D_P)$ and let $\lambda,\mu>0$.
+If both $g,h$ are nonzero partial gains, then $\lambda g+\mu h$ is a nonzero partial gain. If neither is a partial gain, then $g,h\in K_p$ for every $p\in P$. By positive homogeneity and subadditivity of each $G_p$,
+\[
+G_p(\lambda g+\mu h)
+\le \lambda G_p(g)+\mu G_p(h)<0,
+\]
+so $\lambda g+\mu h\in K_p$ for every $p\in P$. Finally suppose, without loss of generality, that $g\in\R^n_{\ge0}\setminus\{0\}$ and $h\in K_p$ for every $p\in P$. Then $\Phi(g)\in\R^n_{\ge0}\setminus\{0\}$, so $G_p(g)=-p\cdot\Phi(g)\le0$ for every $p\in P$. Hence
+\[
+G_p(\lambda g+\mu h)
+\le \lambda G_p(g)+\mu G_p(h)<0,
+\]
+for every $p\in P$. Thus $\lambda g+\mu h\in\bigcap_{p\in P}K_p$.
+
+(D4) Let $g\in\Phi^{-1}(D_P)\setminus\R^n_{\ge0}$. Then $g\in K_p$ for every $p\in P$. In particular $q\cdot g>0$ and $G_p(g)<0$ for every $p\in P$. Since $p\mapsto G_p(g)$ is continuous and $P$ is compact,
+\[
+M:=\max_{p\in P}G_p(g)<0.
+\]
+Choose $\delta_0\in(0,q\cdot g)$. For $0\le\delta\le\delta_0$,
+\[
+q\cdot(g-\delta\one)=q\cdot g-\delta\ge q\cdot g-\delta_0>0,
+\]
+so $g-\delta\one\in G_q^+$. The map
+\[
+(p,\delta)\longmapsto G_p(g-\delta\one)
+\]
+is continuous on the compact set $P\times[0,\delta_0]$. Hence it is uniformly continuous. Choose $\delta\in(0,\delta_0]$ small enough that
+\[
+\left|G_p(g-\delta\one)-G_p(g)\right|<-M/2
+\qquad\forall p\in P.
+\]
+Then
+\[
+G_p(g-\delta\one)\le G_p(g)-M/2\le M/2<0
+\qquad\forall p\in P.
+\]
+Thus $g-\delta\one\in\bigcap_{p\in P}K_p\subseteq\Phi^{-1}(D_P)$.
+\end{proof}
+
+\section{Injectivity}
+
+The CPM theorem above does not require injectivity. Injectivity is a separate projective condition. The next proposition gives the exact criterion.
+
+Let
+\[
+\Sigma_q:=\{t\in\R^n:q\cdot t=1\},
+\qquad
+R_\rho(t):=(\rho_1(t_1),\ldots,\rho_n(t_n)).
+\]
+Since every $g\in G_q^+$ has a unique decomposition
+\[
+g=s t,
+\qquad s:=q\cdot g>0,
+\qquad t:=g/(q\cdot g)\in\Sigma_q,
+\]
+we have
+\[
+\Phi(g)=sR_\rho(t).
+\]
+
+\begin{definition}[Projective injectivity on the $q$-slice]
+The generator family $\rho$ is projectively injective on $\Sigma_q$ if, whenever $t,u\in\Sigma_q$ and $a>0$ satisfy
+\[
+R_\rho(t)=aR_\rho(u),
+\]
+then $a=1$ and $t=u$.
+\end{definition}
+
+\begin{proposition}[Injectivity criterion]
+The signed-perspective score $\Phi:G_q^+\to\R^n$ is injective if and only if $\rho$ is projectively injective on $\Sigma_q$.
+\end{proposition}
+
+\begin{proof}
+First assume that $\rho$ is projectively injective. Suppose $\Phi(g)=\Phi(h)$. Write
+\[
+g=s t,
+\qquad h=s' u,
+\qquad s=q\cdot g>0,
+\quad s'=q\cdot h>0,
+\quad t,u\in\Sigma_q.
+\]
+Then
+\[
+sR_\rho(t)=s'R_\rho(u),
+\]
+so
+\[
+R_\rho(t)=(s'/s)R_\rho(u).
+\]
+Projective injectivity gives $s'/s=1$ and $t=u$. Hence $g=h$.
+
+Conversely, suppose projective injectivity fails. Then there exist $t,u\in\Sigma_q$ and $a>0$ such that
+\[
+R_\rho(t)=aR_\rho(u)
+\]
+but not both $a=1$ and $t=u$. Put $g:=t$ and $h:=a u$. Since $q\cdot t=q\cdot u=1$, both $g,h\in G_q^+$ and
+\[
+\Phi(g)=R_\rho(t)=aR_\rho(u)=\Phi(a u)=\Phi(h).
+\]
+Moreover $g\ne h$: if $t=au$, then applying $q\cdot$ gives $1=a$, and then $t=u$, contrary to the assumed failure. Hence $\Phi$ is not injective.
+\end{proof}
+
+\begin{lemma}[A concrete sufficient condition for injectivity]
+If each $\rho_i$ is strictly increasing on $\R$, then $\rho$ is projectively injective on $\Sigma_q$. Hence $\Phi$ is injective.
+\end{lemma}
+
+\begin{proof}
+Suppose $R_\rho(t)=aR_\rho(u)$ for some $t,u\in\Sigma_q$ and $a>0$. If $a=1$, strict increase of each $\rho_i$ gives $t_i=u_i$ for every $i$, hence $t=u$.
+
+Assume $a>1$. We claim that $t_i\ge a u_i$ for every $i$. If $u_i=0$, then $\rho_i(t_i)=a\rho_i(0)=0$, and sign preservation gives $t_i=0=a u_i$. If $u_i\ne0$, concavity and $\rho_i(0)=0$ imply
+\[
+\rho_i(a u_i)\le a\rho_i(u_i).
+\]
+Since $\rho_i(t_i)=a\rho_i(u_i)$ and $\rho_i$ is strictly increasing, it follows that $t_i\ge a u_i$. Therefore
+\[
+1=q\cdot t\ge a(q\cdot u)=a>1,
+\]
+a contradiction. If $0<a<1$, interchange $t$ and $u$ and apply the previous argument to $1/a>1$. Thus $a=1$, and then $t=u$ as above.
+\end{proof}
+
+\begin{corollary}[Homeomorphism onto the image]
+If $\rho$ is projectively injective on $\Sigma_q$, then $\Phi:G_q^+\to\Phi(G_q^+)$ is a homeomorphism.
+\end{corollary}
+
+\begin{proof}
+The domain $G_q^+$ is open in $\R^n$, and $\Phi$ is continuous and injective. By invariance of domain, $\Phi(G_q^+)$ is open in $\R^n$ and the inverse map from $\Phi(G_q^+)$ to $G_q^+$ is continuous.
+\end{proof}
+
+\begin{remark}[What is, and is not, automatic]
+Concavity and sign preservation of the one-dimensional generators are enough for the CPM theorem, but they are not the same thing as injectivity. For publication-level use, injectivity should therefore either be verified directly for the chosen generator family or imposed through the projective injectivity condition above. In the inverse-quadratic case, and in the older perspective setting when an explicit scalar inversion theorem is available, injectivity is proved by recovering the scale $q\cdot g$ from a one-dimensional equation such as $F(S)=B$; that special scalar recovery mechanism is absent from the present signed-perspective framework. The CPM proof and the injectivity proof are logically independent: the former is a convexity/sublinearity argument for all scalar pullbacks $-p\cdot\Phi$, while the latter is a projective one-to-one condition on the slice $\Sigma_q$.
+\end{remark}
+
+\section{Examples}
+
+\begin{example}[Injective signed-diagonal scores]
+Fix constants $c_i^-,c_i^+>0$ with $c_i^-\ge c_i^+$, and define
+\[
+\rho_i(t):=
+\begin{cases}
+ c_i^+ t, & t\ge0,\\
+ c_i^- t, & t\le0.
+\end{cases}
+\]
+Then $\rho_i$ is finite, concave, strictly increasing, and signed. Hence the associated signed-perspective score is a CPM and is injective by the sufficient condition above. Explicitly,
+\[
+\Phi_i(g)=
+\begin{cases}
+ c_i^+ g_i, & g_i\ge0,\\
+ c_i^- g_i, & g_i\le0.
+\end{cases}
+\]
+This example is already outside the older perspective family whenever some $c_i^+\ne1$, because positive coordinates are not copied exactly. Taking $c_i^->c_i^+>0$ gives a genuinely signed-diagonal concave kink at the seam.
+\end{example}
+
+\begin{example}[Noninjective signed concave generator]
+Let $n\ge3$, let $q=(1/n,\ldots,1/n)$, and set
+\[
+\rho_i(t):=\min\{t,1\}
+\qquad(i=1,\ldots,n).
+\]
+This function is finite, concave, satisfies $\rho_i(0)=0$, and is strictly sign-preserving, but it is not strictly increasing on $[1,\infty)$. For $n=3$, put
+\[
+t=\left(\frac{6}{5},\frac{6}{5},\frac{3}{5}\right),
+\qquad u=\left(\frac{13}{10},\frac{11}{10},\frac{3}{5}\right).
+\]
+Both points lie in $\Sigma_q$, they are distinct, and
+\[
+R_\rho(t)=R_\rho(u)=\left(1,1,\frac{3}{5}\right).
+\]
+Thus projective injectivity fails, and so the associated $\Phi$ is not injective. This example shows that the injectivity condition is not vacuous.
+\end{example}
+
+\section{Relation to the older perspective family}
+
+The earlier score
+\[
+\phi_i(g)=g_i-(q\cdot g)\psi_i\!\left(\frac{g_i}{q\cdot g}\right)
+\]
+is the special case
+\[
+\rho_i(t)=t-\psi_i(t).
+\]
+If each $\psi_i$ is convex, nonnegative, and vanishes on $[0,\infty)$, then $\rho_i$ is concave, $\rho_i(t)=t$ for $t\ge0$, and $\rho_i(t)\le t<0$ for $t<0$. Thus the older family is a signed-perspective family with the additional restriction that positive coordinates are copied exactly. The present theorem removes that restriction: positive coordinates may be transformed nontrivially, as long as the signed concavity hypotheses are preserved.
+
+\section{Status of exact representation of arbitrary compact credal sets}
+
+The CPM theorem should be separated from the stronger exact-representation question. Given a compact set $P\subseteq\interior\DeltaN$, exact representation by a single output halfspace would ask for some $q\in\interior\DeltaN$, some $p\in\DeltaN$, and some signed concave generators $\rho_i$ such that
+\[
+\Phi^{-1}(D_p)=D_P.
+\]
+On the projective slice $\Sigma_q$, this is equivalent to the additive-separable sign representation
+\[
+\sum_i p_i\rho_i(t_i)>0
+\quad\Longleftrightarrow\quad
+\min_{r\in P} r\cdot t>0,
+\qquad t\in\Sigma_q.
+\]
+The theorem above does not prove that such a representation exists for every compact interior $P$. There are structural reasons to treat the universal claim with caution: the left-hand side is additively separable in the coordinates on the slice, whereas the right-hand side is the lower envelope of an arbitrary compact family of affine functionals. This separability imposes restrictions, especially on the geometry of smooth boundary pieces and on the combinatorics of polyhedral examples. No universal representation theorem is claimed here.
+
+\end{document}

@@ -1,0 +1,2885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Robust decisions under environmental uncertainty</title>
+<script>
+  window.MathJax = {
+    tex: { inlineMath: [['$', '$']], displayMath: [['$$', '$$']] },
+    chtml: { scale: 1.0 }
+  };
+</script>
+<script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+<style>
+  :root {
+    --beamer-blue: #1f3a6e;
+    --beamer-accent: #b22222;
+    --paper-bg: #ffffff;
+    --frame-shadow: 0 1px 4px rgba(0,0,0,0.10);
+    --text: #1c1c1c;
+    --muted: #5a5a5a;
+    --soft: #888;
+    --grid: #cfd8e3;
+    --bar-orig: #999;
+    --bar-low: #2a4d8f;
+    --good: #2c7a3f;
+    --bad: #b22222;
+    --warm: #b58900;
+  }
+  html, body {
+    margin: 0; padding: 0;
+    background: #ececec;
+    font-family: 'Latin Modern Roman', Georgia, 'Cambria', 'Times New Roman', serif;
+    color: var(--text);
+    -webkit-font-smoothing: antialiased;
+  }
+  .slide {
+    display: none;
+    width: 1100px; height: 720px;
+    margin: 24px auto;
+    background: var(--paper-bg);
+    box-shadow: var(--frame-shadow);
+    padding: 30px 56px 36px 56px;
+    box-sizing: border-box;
+    position: relative;
+  }
+  .slide.active { display: block; }
+  .frametitle {
+    font-size: 28px; font-weight: 700; color: var(--beamer-blue);
+    margin: 0 0 4px 0; letter-spacing: 0.2px;
+  }
+  .frame-rule { height: 2px; background: var(--beamer-blue); margin: 0 0 18px 0; width: 100%; }
+  .pagenum { position: absolute; bottom: 14px; right: 28px; font-size: 11px; color: var(--soft); font-variant-numeric: tabular-nums; }
+  .footline { position: absolute; bottom: 14px; left: 28px; font-size: 11px; color: var(--soft); font-style: italic; }
+
+  /* Body content classes — kept simple */
+  .body { font-size: 20px; line-height: 1.45; max-width: 920px; }
+  .body.center { margin: 0 auto; text-align: center; }
+  .body em { color: var(--beamer-blue); font-style: italic; font-weight: 600; }
+  .body ul { padding-left: 26px; }
+  .body li { margin-bottom: 5px; }
+  .small { font-size: 16px; color: var(--muted); }
+
+  .hero { font-size: 25px; line-height: 1.4; margin: 36px auto 0; max-width: 880px; text-align: center; }
+  .hero em { color: var(--beamer-blue); font-style: italic; font-weight: 600; }
+
+  .three-col { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 22px; margin-top: 20px; }
+  .app-card {
+    background: #fafafa; border-left: 3px solid var(--beamer-blue);
+    padding: 16px 20px; border-radius: 0 4px 4px 0;
+  }
+  .app-card .title { font-weight: 700; color: var(--beamer-blue); margin-bottom: 6px; font-size: 18px; }
+  .app-card .sub { font-size: 15px; color: var(--muted); line-height: 1.5; }
+
+  /* GIFs */
+  .gif-single { max-width: 640px; margin: 10px auto 0; }
+  .gif-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; max-width: 960px; margin: 8px auto 0; }
+  .gif-card {
+    background: #fafafa; border: 1.5px solid var(--grid); border-radius: 4px;
+    padding: 8px; box-shadow: var(--frame-shadow);
+  }
+  .gif-card.good { border-color: var(--good); border-width: 2px; }
+  .gif-card.bad { border-color: var(--bad); border-width: 2px; }
+  .gif-card.warm { border-color: var(--warm); border-width: 2px; }
+  .gif-card.muted { border-color: #aaa; }
+  .gif-card img { display: block; width: 100%; height: auto; border-radius: 2px; }
+  .gif-cap { padding: 10px 6px 4px; font-size: 16px; }
+  .gif-cap.small { font-size: 14px; }
+  .gif-cap .label { font-weight: 700; color: var(--beamer-blue); }
+  .gif-cap .label.bad { color: var(--bad); }
+  .gif-cap .label.good { color: var(--good); }
+  .gif-cap .label.muted { color: #666; }
+  .gif-cap .small { font-size: 13px; color: var(--muted); font-style: italic; }
+
+  /* SVG */
+  .arch-svg, .chart-svg { display: block; margin: 0 auto; }
+  .box { fill: #f5f8fc; stroke: var(--beamer-blue); stroke-width: 1.4; }
+  .box-warm { fill: #fdf6e3; stroke: #b58900; }
+  .box-label { font-family: inherit; font-size: 16px; fill: var(--text); text-anchor: middle; dominant-baseline: central; }
+  .box-label-small { font-family: inherit; font-size: 13px; fill: var(--muted); text-anchor: middle; dominant-baseline: central; }
+  .arrow { stroke: var(--text); stroke-width: 1.4; fill: none; marker-end: url(#arrowhead); }
+
+  /* Pills */
+  .pill {
+    display: inline-block; padding: 4px 14px; border-radius: 12px;
+    background: #e7eef8; color: var(--beamer-blue);
+    font-size: 16px; font-weight: 600;
+  }
+  .pill-accent { background: #fce7e7; color: var(--beamer-accent); }
+  .pill-good { background: #e3f2e7; color: var(--good); }
+  .pill-warm { background: #fdf6e3; color: var(--warm); }
+
+  /* Risk knob */
+  .knob {
+    width: 80%; height: 22px;
+    margin: 30px auto 8px;
+    background: linear-gradient(to right, #2c7a3f 0%, #aac4ec 50%, #b22222 100%);
+    border-radius: 11px;
+    position: relative;
+  }
+  .knob-row {
+    position: relative; width: 80%; margin: 0 auto; height: 90px;
+  }
+  .knob-tick { position: absolute; top: -28px; width: 2px; height: 30px; background: var(--text); }
+  .knob-label { position: absolute; top: 8px; transform: translateX(-50%); font-size: 16px; color: var(--text); text-align: center; width: 200px; }
+  .knob-label .role { display: block; font-size: 14px; color: var(--muted); font-style: italic; margin-top: 4px; }
+
+  .axis { stroke: var(--text); stroke-width: 1; }
+  .gridline { stroke: var(--grid); stroke-width: 0.5; stroke-dasharray: 2 2; }
+  .axis-label { font-family: inherit; font-size: 13px; fill: var(--text); }
+  .axis-tick { font-family: inherit; font-size: 12px; fill: var(--muted); }
+  .legend { font-family: inherit; font-size: 13px; fill: var(--text); }
+
+  .navhint {
+    position: fixed; bottom: 8px; left: 50%; transform: translateX(-50%);
+    font-size: 11px; color: #aaa; letter-spacing: 0.5px;
+  }
+
+  /* Concept blocks (used sparingly) */
+  .concept-block {
+    border: 1.5px solid var(--grid); border-radius: 6px;
+    padding: 14px 18px; background: #fafafa; margin-top: 12px;
+  }
+  .concept-block.warm { border-color: var(--warm); background: #fffcf2; }
+  .concept-block.blue { border-color: var(--beamer-blue); background: #f5f8fc; }
+  .concept-block.accent { border-color: var(--beamer-accent); background: #fff5f5; }
+  .concept-block .head {
+    font-weight: 700; color: var(--beamer-blue); font-size: 18px;
+    margin-bottom: 8px;
+  }
+  .concept-block.warm .head { color: var(--warm); }
+  .concept-block.accent .head { color: var(--beamer-accent); }
+
+  .col-headers { display: grid; grid-template-columns: 1fr 1fr; gap: 28px; max-width: 960px; margin: 0 auto 6px; }
+  .col-header { text-align: center; font-size: 15px; font-weight: 700; }
+
+  /* Three-uses slides (slides 1-3) — image-dominant stacked layout */
+  .use-block {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    margin-top: 4px;
+  }
+  .use-pill {
+    display: inline-block;
+    padding: 3px 12px;
+    border-radius: 10px;
+    background: #f0f4fa;
+    color: var(--beamer-blue);
+    font-size: 13px;
+    font-style: italic;
+    letter-spacing: 0.4px;
+    align-self: flex-start;
+  }
+  .use-figure {
+    width: 100%;
+    max-width: 820px;
+    border: 1.5px solid var(--grid);
+    border-radius: 4px;
+    background: #fafafa;
+    padding: 8px;
+    box-shadow: var(--frame-shadow);
+    box-sizing: border-box;
+  }
+  .use-figure img {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 420px;
+    object-fit: contain;
+    border-radius: 2px;
+  }
+  .use-figure-square { max-width: 460px; }
+  .use-figure-square img { max-height: 460px; }
+  .use-text {
+    text-align: center;
+    max-width: 900px;
+    padding: 0 6px;
+  }
+  .use-title {
+    font-size: 30px;
+    font-weight: 700;
+    color: var(--beamer-blue);
+    margin-bottom: 6px;
+    line-height: 1.25;
+  }
+  .use-title .cite {
+    display: inline-block;
+    font-size: 16px;
+    font-weight: 400;
+    color: var(--muted);
+    font-style: italic;
+    margin-left: 6px;
+  }
+  .use-text p {
+    font-size: 22px;
+    line-height: 1.45;
+    color: var(--text);
+    margin: 0;
+  }
+
+  /* Classes added for the recovered second half */
+  .big-number {
+    font-size: 64px; font-weight: 700; line-height: 1;
+  }
+  .big-number-label {
+    font-size: 18px; color: var(--muted); margin-bottom: 12px;
+  }
+  .caveat {
+    font-size: 16px; color: var(--muted); font-style: italic;
+    margin-top: 36px; text-align: center;
+  }
+  .cite-list { list-style: none; padding: 0; margin: 0; }
+  .cite-list li {
+    font-size: 19px; line-height: 1.5; margin-bottom: 16px;
+    padding-left: 18px; text-indent: -18px;
+  }
+  .cite-list .topic { font-weight: 600; color: var(--beamer-blue); }
+  .cite-list .ref { color: var(--muted); }
+  .takeaway-box {
+    margin-top: 40px; padding: 28px 36px;
+    border-left: 4px solid var(--beamer-blue);
+    background: #f5f8fc;
+    font-size: 22px; line-height: 1.6;
+  }
+  .takeaway-box em { color: var(--beamer-blue); font-style: italic; font-weight: 600; }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<!-- 1 — TITLE SLIDE                                                   -->
+<!-- ============================================================ -->
+<div class="slide active">
+  <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center;">
+    <div style="font-size: 46px; font-weight: 700; color: var(--beamer-blue); line-height: 1.2; margin-bottom: 70px;">
+      Imprecision in control problems
+    </div>
+    <div style="font-size: 26px; color: var(--text); margin-bottom: 18px;">
+      Jason Konek
+    </div>
+    <div style="font-size: 22px; color: var(--muted); font-style: italic; margin-bottom: 8px;">
+      Beyond Basic Bayesianism
+    </div>
+    <div style="font-size: 20px; color: var(--muted); margin-bottom: 4px;">
+      26 May 2026
+    </div>
+    <div style="font-size: 20px; color: var(--muted);">
+      University of Helsinki
+    </div>
+  </div>
+  <div class="pagenum">1 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- NEW — QR CODE                                                     -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div style="display: flex; justify-content: center; align-items: center; height: 100%;">
+    <img src="helsinki-qr-code.png" alt="Helsinki QR code"
+         style="max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain;">
+  </div>
+  <div class="pagenum">2 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 3 — MARS ROVER HOOK                                               -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%;">
+    <img src="gifs/marsrover.gif"
+         alt="Mars rover"
+         style="max-width: 1000px; max-height: 560px; width: auto; height: auto; object-fit: contain;
+                border: 1.5px solid var(--grid); border-radius: 4px; box-shadow: var(--frame-shadow);">
+    <p style="font-size: 32px; font-weight: 600; color: var(--beamer-blue); margin-top: 28px; text-align: center; line-height: 1.3;">
+      Can imprecise probability help us get to Mars?
+    </p>
+  </div>
+  <div class="pagenum">3 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 3 — PLAN                                                          -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Plan</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; flex-direction: column; align-items: flex-start; justify-content: center; height: 78%; max-width: 760px; margin: 28px auto 0;">
+    <ol style="font-size: 26px; line-height: 1.85; color: var(--text); padding-left: 36px; margin: 0;">
+      <li>Strictly proper scoring rules.</li>
+      <li>Loss functions for imprecise probabilities.</li>
+      <li>Ecological rationality and control problems.</li>
+      <li>Interval DQN.</li>
+      <li>Application.</li>
+    </ol>
+  </div>
+
+  <div class="footline">plan of the talk</div>
+  <div class="pagenum">4 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 3 — USE 1: EVALUATING FORECASTERS                                 -->
+<!-- ============================================================ -->
+<!-- SECTION DIVIDER: I -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100%; text-align: center;">
+    <div style="font-size: 22px; font-style: italic; color: var(--soft); letter-spacing: 3px; margin-bottom: 30px;">Section I</div>
+    <div style="height: 2px; width: 140px; background: var(--beamer-blue); opacity: 0.5; margin-bottom: 36px;"></div>
+    <div style="font-size: 50px; font-weight: 700; color: var(--beamer-blue); line-height: 1.2; max-width: 900px;">Strictly proper<br/>scoring rules</div>
+  </div>
+  <div class="pagenum">5 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Three uses of strictly proper scoring rules</div>
+  <div class="frame-rule"></div>
+
+  <div class="use-block">
+    <div class="use-pill">use 1 of 3</div>
+    <div class="use-figure">
+      <img src="images/use1_evaluating.gif" alt="Evaluating forecasters">
+    </div>
+    <div class="use-text">
+      <div class="use-title">Evaluating forecasters</div>
+      <p>Compare forecasters on past or expected future performance.</p>
+    </div>
+  </div>
+
+  <div class="footline">scoring rules — three classical uses</div>
+  <div class="pagenum">6 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 2 — USE 2: ELICITING OPINIONS                                     -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Three uses of strictly proper scoring rules</div>
+  <div class="frame-rule"></div>
+
+  <div class="use-block">
+    <div class="use-pill">use 2 of 3</div>
+    <div class="use-figure">
+      <img src="images/use2_eliciting.gif" alt="Eliciting opinions">
+    </div>
+    <div class="use-text">
+      <div class="use-title">Eliciting opinions <span class="cite">(Brier 1950, Savage 1971)</span></div>
+      <p>Penalise forecasters using a loss function. Strict propriety incentivises honest reporting.</p>
+    </div>
+  </div>
+
+  <div class="footline">scoring rules — three classical uses</div>
+  <div class="pagenum">7 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 3 — USE 3: JUSTIFYING EPISTEMIC NORMS                             -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Three uses of strictly proper scoring rules</div>
+  <div class="frame-rule"></div>
+
+  <div class="use-block">
+    <div class="use-pill">use 3 of 3</div>
+    <div class="use-figure use-figure-square">
+      <img src="images/use3_norms.png" alt="Justifying epistemic norms">
+    </div>
+    <div class="use-text">
+      <div class="use-title">Justifying epistemic norms</div>
+      <p>Accuracy arguments for probabilism, conditionalization, deference principles, etc.</p>
+    </div>
+  </div>
+
+  <div class="footline">scoring rules — three classical uses</div>
+  <div class="pagenum">8 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 4 — SCORING RULES BASICS                                          -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Scoring rules &mdash; the basics</div>
+  <div class="frame-rule"></div>
+
+  <div class="body" style="margin-top: 4px;">
+    <p>A binary <em>scoring rule</em> is a pair $(g_1, g_0)$. If the forecast for event $E$ is $x \in [0, 1]$ and $Y = \mathbf{1}_E$, the loss is $g_Y(x)$. Expected loss under belief $p$:</p>
+    <p style="text-align: center; font-size: 21px; margin: 8px 0;">$m(x; p) = p\, g_1(x) + (1-p)\, g_0(x).$</p>
+    <p>The rule is <em>strictly proper</em> if $m(\cdot\,; p)$ has its unique minimum at $x = p$, for every $p \in [0, 1]$.</p>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1.05fr 1fr; gap: 28px; margin-top: 14px; align-items: center;">
+    <div>
+      <div class="concept-block blue" style="margin-top: 0;">
+        <div class="head">Two canonical strictly proper rules</div>
+        <div class="body" style="font-size: 18px; margin-top: 2px;">
+          <p style="margin: 4px 0;"><strong>Brier:</strong> &nbsp; $g_1(x) = (1-x)^2,$ &nbsp; $g_0(x) = x^2.$</p>
+          <p style="margin: 4px 0;"><strong>Log:</strong> &nbsp;&nbsp; $g_1(x) = -\ln x,$ &nbsp; $g_0(x) = -\ln(1 - x).$</p>
+        </div>
+      </div>
+      <p class="body" style="margin-top: 12px; font-size: 15px; color: var(--muted); font-style: italic;">
+        Absolute, Euclidean, and spherical rules are not strictly proper.
+      </p>
+    </div>
+    <div>
+      <svg viewBox="-46 -22 388 312" width="100%" height="auto" style="max-height: 320px; display: block; margin: 0 auto;">
+        <!-- y-axis label -->
+        <text x="-38" y="120.0" font-size="12" fill="var(--text)" text-anchor="middle" transform="rotate(-90 -38 120.0)">Brier score</text>
+        <!-- gridlines + tick marks + tick labels -->
+        <line x1="0" y1="240.0" x2="320" y2="240.0" stroke="var(--grid)" stroke-width="0.5"/>
+        <line x1="-4" y1="240.0" x2="0" y2="240.0" stroke="var(--text)" stroke-width="0.8"/>
+        <text x="-7" y="243.0" font-size="11" fill="var(--muted)" text-anchor="end">0</text>
+        <line x1="0" y1="180.0" x2="320" y2="180.0" stroke="var(--grid)" stroke-width="0.5"/>
+        <line x1="-4" y1="180.0" x2="0" y2="180.0" stroke="var(--text)" stroke-width="0.8"/>
+        <text x="-7" y="183.0" font-size="11" fill="var(--muted)" text-anchor="end">0.25</text>
+        <line x1="0" y1="120.0" x2="320" y2="120.0" stroke="var(--grid)" stroke-width="0.5"/>
+        <line x1="-4" y1="120.0" x2="0" y2="120.0" stroke="var(--text)" stroke-width="0.8"/>
+        <text x="-7" y="123.0" font-size="11" fill="var(--muted)" text-anchor="end">0.5</text>
+        <line x1="0" y1="60.0" x2="320" y2="60.0" stroke="var(--grid)" stroke-width="0.5"/>
+        <line x1="-4" y1="60.0" x2="0" y2="60.0" stroke="var(--text)" stroke-width="0.8"/>
+        <text x="-7" y="63.0" font-size="11" fill="var(--muted)" text-anchor="end">0.75</text>
+        <line x1="0" y1="0.0" x2="320" y2="0.0" stroke="var(--grid)" stroke-width="0.5"/>
+        <line x1="-4" y1="0.0" x2="0" y2="0.0" stroke="var(--text)" stroke-width="0.8"/>
+        <text x="-7" y="3.0" font-size="11" fill="var(--muted)" text-anchor="end">1</text>
+        <line x1="0.0" y1="240" x2="0.0" y2="244" stroke="var(--text)" stroke-width="0.8"/>
+        <text x="0.0" y="256" font-size="11" fill="var(--muted)" text-anchor="middle">0</text>
+        <line x1="80.0" y1="240" x2="80.0" y2="244" stroke="var(--text)" stroke-width="0.8"/>
+        <text x="80.0" y="256" font-size="11" fill="var(--muted)" text-anchor="middle">0.25</text>
+        <line x1="160.0" y1="240" x2="160.0" y2="244" stroke="var(--text)" stroke-width="0.8"/>
+        <text x="160.0" y="256" font-size="11" fill="var(--muted)" text-anchor="middle">0.5</text>
+        <line x1="240.0" y1="240" x2="240.0" y2="244" stroke="var(--text)" stroke-width="0.8"/>
+        <text x="240.0" y="256" font-size="11" fill="var(--muted)" text-anchor="middle">0.75</text>
+        <line x1="320.0" y1="240" x2="320.0" y2="244" stroke="var(--text)" stroke-width="0.8"/>
+        <text x="320.0" y="256" font-size="11" fill="var(--muted)" text-anchor="middle">1</text>
+        <!-- axes -->
+        <line x1="0" y1="0" x2="0" y2="240" stroke="var(--text)" stroke-width="1"/>
+        <line x1="0" y1="240" x2="320" y2="240" stroke="var(--text)" stroke-width="1"/>
+        <!-- x-axis label -->
+        <text x="160.0" y="276" font-size="12" fill="var(--text)" text-anchor="middle">Forecast</text>
+        <!-- curves -->
+        <polyline points="0.00,0.00 4.00,5.96 8.00,11.85 12.00,17.66 16.00,23.40 20.00,29.06 24.00,34.65 28.00,40.16 32.00,45.60 36.00,50.96 40.00,56.25 44.00,61.46 48.00,66.60 52.00,71.66 56.00,76.65 60.00,81.56 64.00,86.40 68.00,91.16 72.00,95.85 76.00,100.46 80.00,105.00 84.00,109.46 88.00,113.85 92.00,118.16 96.00,122.40 100.00,126.56 104.00,130.65 108.00,134.66 112.00,138.60 116.00,142.46 120.00,146.25 124.00,149.96 128.00,153.60 132.00,157.16 136.00,160.65 140.00,164.06 144.00,167.40 148.00,170.66 152.00,173.85 156.00,176.96 160.00,180.00 164.00,182.96 168.00,185.85 172.00,188.66 176.00,191.40 180.00,194.06 184.00,196.65 188.00,199.16 192.00,201.60 196.00,203.96 200.00,206.25 204.00,208.46 208.00,210.60 212.00,212.66 216.00,214.65 220.00,216.56 224.00,218.40 228.00,220.16 232.00,221.85 236.00,223.46 240.00,225.00 244.00,226.46 248.00,227.85 252.00,229.16 256.00,230.40 260.00,231.56 264.00,232.65 268.00,233.66 272.00,234.60 276.00,235.46 280.00,236.25 284.00,236.96 288.00,237.60 292.00,238.16 296.00,238.65 300.00,239.06 304.00,239.40 308.00,239.66 312.00,239.85 316.00,239.96 320.00,240.00" fill="none" stroke="#b22222" stroke-width="2.2"/>
+        <polyline points="0.00,240.00 4.00,239.96 8.00,239.85 12.00,239.66 16.00,239.40 20.00,239.06 24.00,238.65 28.00,238.16 32.00,237.60 36.00,236.96 40.00,236.25 44.00,235.46 48.00,234.60 52.00,233.66 56.00,232.65 60.00,231.56 64.00,230.40 68.00,229.16 72.00,227.85 76.00,226.46 80.00,225.00 84.00,223.46 88.00,221.85 92.00,220.16 96.00,218.40 100.00,216.56 104.00,214.65 108.00,212.66 112.00,210.60 116.00,208.46 120.00,206.25 124.00,203.96 128.00,201.60 132.00,199.16 136.00,196.65 140.00,194.06 144.00,191.40 148.00,188.66 152.00,185.85 156.00,182.96 160.00,180.00 164.00,176.96 168.00,173.85 172.00,170.66 176.00,167.40 180.00,164.06 184.00,160.65 188.00,157.16 192.00,153.60 196.00,149.96 200.00,146.25 204.00,142.46 208.00,138.60 212.00,134.66 216.00,130.65 220.00,126.56 224.00,122.40 228.00,118.16 232.00,113.85 236.00,109.46 240.00,105.00 244.00,100.46 248.00,95.85 252.00,91.16 256.00,86.40 260.00,81.56 264.00,76.65 268.00,71.66 272.00,66.60 276.00,61.46 280.00,56.25 284.00,50.96 288.00,45.60 292.00,40.16 296.00,34.65 300.00,29.06 304.00,23.40 308.00,17.66 312.00,11.85 316.00,5.96 320.00,0.00" fill="none" stroke="#2a4d8f" stroke-width="2.2"/>
+        <!-- inline curve labels: outcome 1 attached near (0.18, 0.67); outcome 0 near (0.78, 0.61) -->
+        <text x="36" y="84" font-size="13" fill="#b22222" font-weight="600">Outcome = 1</text>
+        <text x="195" y="84" font-size="13" fill="#2a4d8f" font-weight="600">Outcome = 0</text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="footline">basics — definition and the two canonical strictly proper rules</div>
+  <div class="pagenum">9 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 5 — COHERENT STRICTLY DESIRABLE GAMBLES                          -->
+<!-- ============================================================ -->
+<!-- SECTION DIVIDER: II -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100%; text-align: center;">
+    <div style="font-size: 22px; font-style: italic; color: var(--soft); letter-spacing: 3px; margin-bottom: 30px;">Section II</div>
+    <div style="height: 2px; width: 140px; background: var(--beamer-blue); opacity: 0.5; margin-bottom: 36px;"></div>
+    <div style="font-size: 50px; font-weight: 700; color: var(--beamer-blue); line-height: 1.2; max-width: 900px;">Loss functions for<br/>imprecise probabilities</div>
+  </div>
+  <div class="pagenum">10 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Coherent sets of strictly desirable gambles</div>
+  <div class="frame-rule"></div>
+
+  <div class="body" style="margin-top: 6px; font-size: 18px;">
+    <p>$\Omega = \{\omega_1, \ldots, \omega_n\}$. &nbsp; $\mathcal{G}(\Omega) = \mathbb{R}^n$ &mdash; gambles. &nbsp; $\mathcal{P}$ &mdash; probability simplex on $\Omega$.</p>
+    <p>A set $\mathcal{D} \subseteq \mathcal{G}(\Omega)$ is a <em>coherent set of strictly desirable gambles</em> iff:</p>
+  </div>
+
+  <div class="concept-block blue" style="margin-top: 4px;">
+    <div class="body" style="font-size: 16px;">
+      <p style="margin: 3px 0;"><strong>(D1)</strong> &nbsp; $\mathbb{R}^n_{\geq 0} \setminus \{0\} \subseteq \mathcal{D}$ &nbsp; (accept partial gains)</p>
+      <p style="margin: 3px 0;"><strong>(D2)</strong> &nbsp; $\mathbb{R}^n_{\leq 0} \cap \mathcal{D} = \emptyset$ &nbsp; (reject sure non-gains)</p>
+      <p style="margin: 3px 0;"><strong>(D3)</strong> &nbsp; $g, h \in \mathcal{D},\, \lambda, \mu > 0 \;\Rightarrow\; \lambda g + \mu h \in \mathcal{D}$ &nbsp; (positive combinations)</p>
+      <p style="margin: 3px 0;"><strong>(D4)</strong> &nbsp; $g \in \mathcal{D},\, g \notin \mathbb{R}^n_{\geq 0} \;\Rightarrow\; \exists \delta > 0 :\, g - \delta\, \mathbf{1} \in \mathcal{D}$ &nbsp; (openness)</p>
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 30px; margin-top: 12px;">
+    <div style="text-align: center;">
+      <svg viewBox="-130 -130 260 260" width="100%" height="auto" style="max-height: 300px;">
+        <!-- D_p region (filled half-plane below the dashed line in math coords; upper-right triangle in svg) -->
+        <path d="M -120 -120 L 120 -120 L 120 120 Z" fill="#e7eef8" fill-opacity="0.85" stroke="none"/>
+        <!-- Boundary line p_1 g_1 + p_2 g_2 = 0 (dashed = open) -->
+        <line x1="-120" y1="-120" x2="120" y2="120" stroke="#1f3a6e" stroke-width="1.4" stroke-dasharray="5 3"/>
+        <!-- Axes -->
+        <line x1="-125" y1="0" x2="125" y2="0" stroke="var(--soft)" stroke-width="0.8"/>
+        <line x1="0" y1="-125" x2="0" y2="125" stroke="var(--soft)" stroke-width="0.8"/>
+        <!-- Axis labels -->
+        <text x="124" y="-6" font-size="12" fill="var(--text)" text-anchor="end" font-style="italic">$g_1$</text>
+        <text x="6" y="-118" font-size="12" fill="var(--text)" font-style="italic">$g_2$</text>
+        <!-- Region label -->
+        <text x="70" y="-55" font-size="15" fill="#1f3a6e" font-weight="700">$\mathcal{D}_p$</text>
+      </svg>
+      <div style="font-size: 14px; color: var(--muted); font-style: italic; margin-top: 2px;">
+        $p = (\tfrac{1}{2}, \tfrac{1}{2})$ &mdash; open halfspace
+      </div>
+    </div>
+    <div style="text-align: center;">
+      <svg viewBox="-130 -130 260 260" width="100%" height="auto" style="max-height: 300px;">
+        <!-- D_P cone: origin → (120, 120/9) → (120, -120) → (-80, -120) → origin -->
+        <path d="M 0 0 L 120 13.333 L 120 -120 L -80 -120 Z" fill="#e7eef8" fill-opacity="0.85" stroke="none"/>
+        <!-- Boundary ray for p = 1/10 (math slope -1/9): svg direction (9, 1) -->
+        <line x1="0" y1="0" x2="120" y2="13.333" stroke="#1f3a6e" stroke-width="1.4" stroke-dasharray="5 3"/>
+        <!-- Boundary ray for p = 6/10 (math slope -3/2): svg direction (-2, -3) -->
+        <line x1="0" y1="0" x2="-80" y2="-120" stroke="#1f3a6e" stroke-width="1.4" stroke-dasharray="5 3"/>
+        <!-- Axes -->
+        <line x1="-125" y1="0" x2="125" y2="0" stroke="var(--soft)" stroke-width="0.8"/>
+        <line x1="0" y1="-125" x2="0" y2="125" stroke="var(--soft)" stroke-width="0.8"/>
+        <!-- Axis labels -->
+        <text x="124" y="-6" font-size="12" fill="var(--text)" text-anchor="end" font-style="italic">$g_1$</text>
+        <text x="6" y="-118" font-size="12" fill="var(--text)" font-style="italic">$g_2$</text>
+        <!-- Region label -->
+        <text x="55" y="-55" font-size="15" fill="#1f3a6e" font-weight="700">$\mathcal{D}_P$</text>
+      </svg>
+      <div style="font-size: 14px; color: var(--muted); font-style: italic; margin-top: 2px;">
+        $P = \{(p, 1-p) : p \in [\tfrac{1}{10}, \tfrac{6}{10}]\}$ &mdash; open cone
+      </div>
+    </div>
+  </div>
+
+  <div class="footline">strict desirability — the IP coherence axioms used throughout</div>
+  <div class="pagenum">11 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 6 — ERROR LOSS FUNCTIONS                                         -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Error loss functions</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: grid; grid-template-columns: 0.85fr 1.15fr; gap: 28px; margin-top: 8px; align-items: center;">
+    <div>
+      <div class="body" style="font-size: 17px;">
+        <p style="margin-top: 0;"><em>Ideal set</em> at world $\omega_i$: &nbsp; $\mathcal{D}^i = \{g \in \mathcal{G}(\Omega) : g_i \geq 0\}.$</p>
+        <p>The <em>error set</em> $\mathcal{D} \triangle \mathcal{D}^i$ decomposes:</p>
+        <ul style="margin-top: 2px;">
+          <li><strong>Type I:</strong> $g \in \mathcal{D} \setminus \mathcal{D}^i$ &mdash; wrongly endorsed.</li>
+          <li><strong>Type II:</strong> $g \in \mathcal{D}^i \setminus \mathcal{D}$ &mdash; wrongly excluded.</li>
+        </ul>
+      </div>
+      <div class="concept-block blue" style="margin-top: 14px;">
+        <div class="head">Finite error loss function</div>
+        <div class="body" style="font-size: 18px; margin-top: 2px;">
+          <p style="text-align: center; margin: 6px 0;">$L_i(\mathcal{D}) \;=\; \mu_i(\mathcal{D} \triangle \mathcal{D}^i)$</p>
+          <p style="font-size: 15px; margin-top: 4px;">$\mu_i$ finite Borel, $\mu_i \ll \mathrm{Leb}$. RN density $m_i = d\mu_i / d\mathrm{Leb}$ is the per-gamble cost at $\omega_i$.</p>
+        </div>
+      </div>
+    </div>
+    <div style="text-align: center;">
+      <svg viewBox="-130 -135 260 280" preserveAspectRatio="xMidYMid meet"
+           style="width: 100%; height: auto; max-height: 540px; display: block; margin: 0 auto;">
+        <defs>
+          <pattern id="d1hatch" patternUnits="userSpaceOnUse" width="9" height="9" patternTransform="rotate(45)">
+            <line x1="0" y1="0" x2="0" y2="9" stroke="#3a3a3a" stroke-width="0.8" stroke-dasharray="2 3" opacity="0.55"/>
+          </pattern>
+        </defs>
+        <!-- D^1 region (right half-plane) shown as dashed hatching -->
+        <rect x="0" y="-130" width="130" height="260" fill="url(#d1hatch)"/>
+        <!-- Type I region (red): D_P slice with g_1 < 0; triangle (0,0)→(0,-120)→(-80,-120) -->
+        <path d="M 0 0 L 0 -120 L -80 -120 Z" fill="#fce7e7" fill-opacity="0.95"/>
+        <!-- Type II region (warm): right half-plane outside D_P; quad (0,0)→(120,13.33)→(120,120)→(0,120) -->
+        <path d="M 0 0 L 120 13.333 L 120 120 L 0 120 Z" fill="#fdf6e3" fill-opacity="0.95"/>
+        <!-- D_P boundary rays (dashed blue): slope -1/9 ray and slope -3/2 ray (from slide 5) -->
+        <line x1="0" y1="0" x2="124" y2="13.78" stroke="#1f3a6e" stroke-width="1.4" stroke-dasharray="5 3"/>
+        <line x1="0" y1="0" x2="-82" y2="-123" stroke="#1f3a6e" stroke-width="1.4" stroke-dasharray="5 3"/>
+        <!-- Axes -->
+        <line x1="-125" y1="0" x2="125" y2="0" stroke="var(--soft)" stroke-width="0.8"/>
+        <line x1="0" y1="-125" x2="0" y2="125" stroke="var(--soft)" stroke-width="0.8"/>
+
+        <!-- Axis labels -->
+        <text x="124" y="-6" font-size="13" fill="var(--text)" text-anchor="end" font-style="italic">$g_1$</text>
+        <text x="6" y="-118" font-size="13" fill="var(--text)" font-style="italic">$g_2$</text>
+        <!-- Type I label -->
+        <text x="-26" y="-75" font-size="13" fill="#b22222" font-weight="700" text-anchor="middle">Type I</text>
+        <text x="-26" y="-60" font-size="11" fill="#b22222" text-anchor="middle">$\mathcal{D}_P \setminus \mathcal{D}^1$</text>
+        <!-- Type II label -->
+        <text x="60" y="68" font-size="13" fill="#b58900" font-weight="700" text-anchor="middle">Type II</text>
+        <text x="60" y="85" font-size="11" fill="#b58900" text-anchor="middle">$\mathcal{D}^1 \setminus \mathcal{D}_P$</text>
+        <!-- D_P annotation -->
+        <text x="55" y="-30" font-size="12" fill="#1f3a6e" font-style="italic">$\mathcal{D}_P$</text>
+        <!-- D^1 label -->
+        <text x="100" y="-105" font-size="13" fill="#3a3a3a" font-weight="700" text-anchor="middle">$\mathcal{D}^1$</text>
+        <text x="100" y="-92" font-size="10" fill="#3a3a3a" text-anchor="middle">$g_1 \geq 0$</text>
+      </svg>
+      <div style="font-size: 14px; color: var(--muted); font-style: italic; margin-top: 2px;">
+        error set $\mathcal{D}_P \triangle \mathcal{D}^1$ for the cone on the previous slide
+      </div>
+    </div>
+  </div>
+
+  <div class="footline">error loss — generalising scoring rules to sets of gambles</div>
+  <div class="pagenum">12 / 46</div>
+</div>
+<!-- ============================================================ -->
+<!-- 10 — COHERENT SETS AS BAYES OPTIMA                                -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">$D$-propriety</div>
+  <div class="frame-rule"></div>
+
+  <p class="body" style="margin-top: 6px; font-size: 17px; margin-bottom: 0;">
+    For $p \in \mathcal{P}$, let &nbsp; $\mathcal{D}_p \;=\; \{g \in \mathcal{G}(\Omega) : \langle p, g\rangle > 0\} \;\cup\; (\mathbb{R}^n_{\geq 0} \setminus \{0\})$ &mdash; the set of gambles with positive expected value relative to the probability mass function $p$.
+  </p>
+
+  <div class="concept-block blue" style="margin-top: 12px;">
+    <div class="head">Definition</div>
+    <div class="body" style="font-size: 18px; margin-top: 2px;">
+      <p style="margin: 2px 0;">A finite error loss $(L_1, \ldots, L_n)$ is <em>$D$-proper</em> if, for every $p \in \mathcal{P}$ and every measurable $\mathcal{D}$ with $\mathrm{Leb}(\mathcal{D} \triangle \mathcal{D}_p) > 0$,</p>
+      <p style="text-align: center; font-size: 24px; margin: 14px 0;">$\displaystyle\sum_{i=1}^n p_i\, L_i(\mathcal{D}_p) \;<\; \sum_{i=1}^n p_i\, L_i(\mathcal{D}).$</p>
+    </div>
+  </div>
+
+  <div class="concept-block accent" style="margin-top: 22px;">
+    <div class="head">Consequence (complete class theorem)</div>
+    <div class="body" style="font-size: 18px; margin-top: 4px;">
+      <p style="margin: 6px 0;">If $L$ is $D$-proper, then the admissible sets of desirable gambles are (up to a set of measure zero) exactly the precise models &nbsp; $\{\mathcal{D}_p : p \in \mathcal{P}\}.$</p>
+    </div>
+  </div>
+
+  <div class="footline">$D$-propriety — strict-min over measurable sets of gambles, not just precise forecasts</div>
+  <div class="pagenum">13 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 7 — D-PROPRIETY                                                  -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Complete class theorem (Wald, SSK)</div>
+  <div class="frame-rule"></div>
+
+  <div class="body" style="margin-top: 4px; font-size: 17px;">
+    <p style="margin: 2px 0;">For each $\mathcal{D} \in \mathcal{M}$, the <em>loss profile</em> is
+    $L(\mathcal{D}) = (L_1(\mathcal{D}), \ldots, L_n(\mathcal{D})) \in \mathbb{R}^n_{\geq 0}$.</p>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 0.95fr 1.1fr; gap: 26px; margin-top: 14px; align-items: start;">
+    <div>
+      <div class="concept-block warm" style="margin-top: 0;">
+        <div class="head">Admissible</div>
+        <div class="body" style="font-size: 16px; margin-top: 2px;">
+          $\mathcal{D}$ is <em>admissible</em> iff there is no $\mathcal{D}'$ with $L(\mathcal{D}') \preceq L(\mathcal{D})$, $L(\mathcal{D}') \ne L(\mathcal{D})$.
+        </div>
+      </div>
+      <div class="concept-block warm" style="margin-top: 10px;">
+        <div class="head">Bayes optimal</div>
+        <div class="body" style="font-size: 16px; margin-top: 2px;">
+          $\mathcal{D}$ is <em>Bayes optimal</em> iff there is $p \in \mathcal{P}$ with $\mathcal{D} \in \arg\min_{\mathcal{D}' \in \mathcal{M}} \sum_i p_i\, L_i(\mathcal{D}').$
+        </div>
+      </div>
+
+      <div class="concept-block blue" style="margin-top: 14px;">
+        <div class="head">Theorem (Wald, SSK)</div>
+        <div class="body" style="font-size: 18px; margin-top: 4px;">
+          <p style="text-align: center; margin: 6px 0;">$\mathcal{D}$ admissible $\;\Longleftrightarrow\;$ $\mathcal{D}$ Bayes optimal.</p>
+        </div>
+      </div>
+    </div>
+
+    <div style="text-align: center;">
+      <svg viewBox="-58 -26 400 380" preserveAspectRatio="xMidYMid meet" style="height: 410px; width: auto; display: block; margin: 0 auto;">
+        <!-- axes -->
+        <line x1="0" y1="0" x2="0" y2="300" stroke="var(--text)" stroke-width="1"/>
+        <line x1="0" y1="300" x2="300" y2="300" stroke="var(--text)" stroke-width="1"/>
+        <!-- axis labels -->
+        <text x="-44" y="150" font-size="13" fill="var(--text)" text-anchor="middle" transform="rotate(-90 -44 150)">L₂ &mdash; loss at ω₂</text>
+        <text x="150" y="338" font-size="13" fill="var(--text)" text-anchor="middle">L₁ &mdash; loss at ω₁</text>
+        <!-- corner tick labels -->
+        <text x="-7" y="304" font-size="11" fill="var(--muted)" text-anchor="end">0</text>
+        <text x="-7" y="4" font-size="11" fill="var(--muted)" text-anchor="end">1</text>
+        <text x="0" y="320" font-size="11" fill="var(--muted)" text-anchor="middle">0</text>
+        <text x="300" y="320" font-size="11" fill="var(--muted)" text-anchor="middle">1</text>
+        <!-- achievable region: convex hull of admissible curve -->
+        <path d="M 0.0,0.0 L 7.5,87.4 L 15.0,119.2 L 22.5,141.8 L 30.0,159.7 L 37.5,174.6 L 45.0,187.4 L 52.5,198.5 L 60.0,208.3 L 67.5,217.1 L 75.0,225.0 L 82.5,232.1 L 90.0,238.6 L 97.5,244.6 L 105.0,250.0 L 112.5,254.9 L 120.0,259.5 L 127.5,263.7 L 135.0,267.5 L 142.5,271.0 L 150.0,274.3 L 157.5,277.2 L 165.0,280.0 L 172.5,282.5 L 180.0,284.8 L 187.5,286.8 L 195.0,288.7 L 202.5,290.5 L 210.0,292.0 L 217.5,293.4 L 225.0,294.6 L 232.5,295.7 L 240.0,296.7 L 247.5,297.5 L 255.0,298.2 L 262.5,298.7 L 270.0,299.2 L 277.5,299.6 L 285.0,299.8 L 292.5,300.0 L 300.0,300.0 L 300,300 L 0,0 Z" fill="#e7eef8" fill-opacity="0.85" stroke="none"/>
+        <!-- admissible boundary curve -->
+        <path d="M 0.0,0.0 L 7.5,87.4 L 15.0,119.2 L 22.5,141.8 L 30.0,159.7 L 37.5,174.6 L 45.0,187.4 L 52.5,198.5 L 60.0,208.3 L 67.5,217.1 L 75.0,225.0 L 82.5,232.1 L 90.0,238.6 L 97.5,244.6 L 105.0,250.0 L 112.5,254.9 L 120.0,259.5 L 127.5,263.7 L 135.0,267.5 L 142.5,271.0 L 150.0,274.3 L 157.5,277.2 L 165.0,280.0 L 172.5,282.5 L 180.0,284.8 L 187.5,286.8 L 195.0,288.7 L 202.5,290.5 L 210.0,292.0 L 217.5,293.4 L 225.0,294.6 L 232.5,295.7 L 240.0,296.7 L 247.5,297.5 L 255.0,298.2 L 262.5,298.7 L 270.0,299.2 L 277.5,299.6 L 285.0,299.8 L 292.5,300.0 L 300.0,300.0" fill="none" stroke="#b22222" stroke-width="2.4"/>
+        <!-- dominated interior point -->
+        <circle cx="150" cy="150" r="6" fill="#1f3a6e"/>
+        <text x="162" y="148" font-size="12" fill="#1f3a6e">L(𝒟) &mdash; dominated</text>
+        <!-- admissible boundary point -->
+        <circle cx="75" cy="225" r="6" fill="#b22222"/>
+        <text x="-4" y="246" font-size="12" fill="#b22222" text-anchor="start">L(𝒟ₚ) &mdash; admissible</text>
+        <!-- arrow dominated -> admissible -->
+        <defs>
+          <marker id="arrowCCT" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+            <path d="M0,0 L10,5 L0,10 z" fill="#1c1c1c"/>
+          </marker>
+        </defs>
+        <line x1="146" y1="155" x2="83" y2="218" stroke="var(--text)" stroke-width="1.2" stroke-dasharray="3 3" marker-end="url(#arrowCCT)"/>
+        <!-- region label -->
+        <text x="210" y="265" font-size="12" fill="var(--muted)" font-style="italic">achievable</text>
+        <text x="210" y="280" font-size="12" fill="var(--muted)" font-style="italic">loss profiles</text>
+      </svg>
+    </div>
+  </div>
+
+  <div class="footline">complete class — admissibility and Bayes optimality coincide</div>
+  <div class="pagenum">14 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 8 — STRICTLY PROPER SCORING RULES IN ERROR LOSS FRAMEWORK        -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Beyond precise probabilities</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 8px;">
+    <div style="text-align: center;">
+      <img src="images/halfspace.png" alt="halfspace D_p in R^3" style="height: 340px; width: auto; display: block; margin: 0 auto;">
+      <div style="font-size: 14px; color: var(--muted); font-style: italic; margin-top: 2px;">
+        halfspace $\mathcal{D}_p$ for $p = (\tfrac{2}{10}, \tfrac{3}{10}, \tfrac{5}{10})$
+      </div>
+    </div>
+    <div style="text-align: center;">
+      <img src="images/coherent_cone.png" alt="coherent set D_P in R^3" style="height: 340px; width: auto; display: block; margin: 0 auto;">
+      <div style="font-size: 14px; color: var(--muted); font-style: italic; margin-top: 2px;">
+        coherent set $\mathcal{D}_P$, &nbsp; $P$ = closed ball around $p$ in the simplex
+      </div>
+    </div>
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin-top: 16px;">
+    <div class="concept-block warm" style="margin-top: 0;">
+      <div class="body" style="font-size: 17px;">
+        <strong>Now.</strong> $D$-proper $\Rightarrow$ halfspaces $\mathcal{D}_p$ are admissible.
+      </div>
+    </div>
+    <div class="concept-block accent" style="margin-top: 0;">
+      <div class="body" style="font-size: 17px;">
+        <strong>Want.</strong> Error losses where coherent $\mathcal{D}$ are admissible.
+      </div>
+    </div>
+  </div>
+
+  <p style="font-size: 22px; font-style: italic; color: var(--beamer-accent); text-align: center; margin-top: 22px; margin-bottom: 0;">
+    Can we find such an error loss function for any coherent $\mathcal{D}$?
+  </p>
+
+  <div class="footline">target — coherent sets, not just halfspaces, as admissible Bayes optima</div>
+  <div class="pagenum">15 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- NEW — SISEPUEDE                                                  -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div style="display: flex; justify-content: center; align-items: center; height: 100%;">
+    <img src="sisepuede.png" alt="sisepuede"
+         style="max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain;">
+  </div>
+  <div class="pagenum">16 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- NEW — IMPOSSIBILITY RESULTS (TEXT)                               -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Impossibility results</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 84%;">
+    <p style="font-size: 24px; line-height: 1.55; color: var(--text); text-align: center; max-width: 880px; margin: 0;">
+      Seidenfeld et al. (2012) establish that there is no strictly proper, continuous real-valued scoring rule for lower and upper probability forecasts.
+    </p>
+  </div>
+
+  <div class="footline">impossibility &mdash; no strictly proper continuous real-valued scoring rule for IP</div>
+  <div class="pagenum">17 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- NEW — IMPOSSIBILITY RESULTS (CURVES)                             -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Impossibility results</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; justify-content: center; align-items: center; height: 84%; margin-top: 4px;">
+    <img src="images/pl_cpm_intervals.png" alt="parametric curves of (l_p, u_p) for piecewise-linear sign-preserving map"
+         style="max-width: 100%; max-height: 540px; width: auto; height: auto; object-fit: contain;
+                border: 1.5px solid var(--grid); border-radius: 4px; box-shadow: var(--frame-shadow);">
+  </div>
+
+  <div class="footline">parametric curves $(\ell_p, u_p)$, $t\in[0,1]$, for piecewise-linear sign-preserving maps</div>
+  <div class="pagenum">18 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 18 — RL AS A CONTROL PROBLEM                                     -->
+<!-- ============================================================ -->
+<!-- CONTROL PROBLEMS (general)                                       -->
+<!-- ============================================================ -->
+<!-- SECTION DIVIDER: III -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100%; text-align: center;">
+    <div style="font-size: 22px; font-style: italic; color: var(--soft); letter-spacing: 3px; margin-bottom: 30px;">Section III</div>
+    <div style="height: 2px; width: 140px; background: var(--beamer-blue); opacity: 0.5; margin-bottom: 36px;"></div>
+    <div style="font-size: 50px; font-weight: 700; color: var(--beamer-blue); line-height: 1.2; max-width: 900px;">Ecological rationality<br/>and control problems</div>
+  </div>
+  <div class="pagenum">19 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 21 — ECOLOGICAL RATIONALITY                                       -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Ecological rationality</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 84%; gap: 22px;">
+
+    <svg viewBox="0 0 800 400" preserveAspectRatio="xMidYMid meet"
+         xmlns="http://www.w3.org/2000/svg"
+         style="width: 100%; max-width: 880px; height: auto; max-height: 420px;
+                border-radius: 4px; box-shadow: var(--frame-shadow); display: block;">
+      <defs>
+        <linearGradient id="jungleBg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#0a1810"/>
+          <stop offset="55%" stop-color="#1a2d18"/>
+          <stop offset="100%" stop-color="#2a3a22"/>
+        </linearGradient>
+        <radialGradient id="lightShaft" cx="0.55" cy="0" r="0.6">
+          <stop offset="0%" stop-color="#cce8a0" stop-opacity="0.18"/>
+          <stop offset="100%" stop-color="#cce8a0" stop-opacity="0"/>
+        </radialGradient>
+      </defs>
+
+      <rect width="800" height="400" fill="url(#jungleBg)"/>
+      <rect width="800" height="400" fill="url(#lightShaft)"/>
+
+      <!-- distant tree trunks -->
+      <g fill="#06100a" opacity="0.85">
+        <rect x="70" y="20" width="14" height="320"/>
+        <rect x="280" y="0" width="12" height="340"/>
+        <rect x="560" y="10" width="16" height="330"/>
+        <rect x="720" y="0" width="14" height="340"/>
+      </g>
+
+      <!-- canopy at top -->
+      <g fill="#0a2410" opacity="0.9">
+        <ellipse cx="50" cy="0" rx="120" ry="55"/>
+        <ellipse cx="200" cy="0" rx="100" ry="48"/>
+        <ellipse cx="350" cy="0" rx="120" ry="55"/>
+        <ellipse cx="520" cy="0" rx="110" ry="52"/>
+        <ellipse cx="700" cy="0" rx="120" ry="58"/>
+        <ellipse cx="800" cy="0" rx="80" ry="40"/>
+      </g>
+
+      <!-- vines hanging from canopy -->
+      <g stroke="#2a3a18" stroke-width="1.5" fill="none" opacity="0.7">
+        <path d="M 100 0 Q 110 80 105 200"/>
+        <path d="M 500 0 Q 510 100 505 250"/>
+        <path d="M 730 0 Q 720 60 725 180"/>
+        <path d="M 260 0 Q 270 60 265 150"/>
+      </g>
+
+      <!-- ground -->
+      <path d="M 0 345 Q 400 340 800 348 L 800 400 L 0 400 Z" fill="#1a2010"/>
+
+      <!-- ground vegetation -->
+      <g fill="#2a3a18">
+        <ellipse cx="60" cy="345" rx="50" ry="10"/>
+        <ellipse cx="320" cy="350" rx="80" ry="12"/>
+        <ellipse cx="620" cy="348" rx="60" ry="10"/>
+        <ellipse cx="780" cy="350" rx="40" ry="8"/>
+      </g>
+
+      <!-- decorative foreground leaves -->
+      <g fill="#2a4a20" stroke="#0a1808" stroke-width="1.2">
+        <path d="M -30 410 Q 60 280 180 320 L 180 332 Q 70 380 -30 410 Z"/>
+        <path d="M 830 -20 Q 720 30 720 130 Q 770 100 830 30 Z"/>
+        <path d="M 830 280 Q 720 250 680 330 Q 750 350 830 320 Z"/>
+      </g>
+
+      <!-- leaf veins -->
+      <g stroke="#0a1808" stroke-width="0.8" fill="none" opacity="0.6">
+        <path d="M -10 395 Q 60 330 170 330"/>
+        <path d="M 0 380 Q 60 350 100 350"/>
+      </g>
+
+      <!-- TIGER (left, facing right toward robot) -->
+      <g transform="translate(160, 305)">
+        <ellipse cx="0" cy="35" rx="65" ry="6" fill="#000" opacity="0.45"/>
+
+        <!-- tail (curling up behind) -->
+        <path d="M -55 -5 Q -82 -28 -92 -8 Q -98 12 -84 16" fill="none" stroke="#e87a3a" stroke-width="9" stroke-linecap="round"/>
+        <path d="M -55 -5 Q -82 -28 -92 -8 Q -98 12 -84 16" fill="none" stroke="#5a2a10" stroke-width="1.5" stroke-linecap="round"/>
+        <path d="M -78 -22 L -82 -14" stroke="#0a0a0a" stroke-width="3" stroke-linecap="round"/>
+        <path d="M -90 -2 L -88 6" stroke="#0a0a0a" stroke-width="3" stroke-linecap="round"/>
+
+        <!-- body -->
+        <ellipse cx="0" cy="0" rx="55" ry="28" fill="#e87a3a" stroke="#5a2a10" stroke-width="1.8"/>
+
+        <!-- legs -->
+        <ellipse cx="-32" cy="28" rx="11" ry="7" fill="#e87a3a" stroke="#5a2a10" stroke-width="1.4"/>
+        <ellipse cx="-12" cy="28" rx="11" ry="7" fill="#e87a3a" stroke="#5a2a10" stroke-width="1.4"/>
+        <ellipse cx="12" cy="28" rx="11" ry="7" fill="#e87a3a" stroke="#5a2a10" stroke-width="1.4"/>
+        <ellipse cx="32" cy="28" rx="11" ry="7" fill="#e87a3a" stroke="#5a2a10" stroke-width="1.4"/>
+
+        <!-- body stripes -->
+        <g fill="none" stroke="#0a0a0a" stroke-width="3.5" stroke-linecap="round">
+          <path d="M -38 -20 Q -38 0 -38 18"/>
+          <path d="M -20 -25 Q -20 0 -20 23"/>
+          <path d="M 0 -27 Q 0 0 0 24"/>
+          <path d="M 20 -25 Q 20 0 20 23"/>
+          <path d="M 38 -20 Q 38 0 38 18"/>
+        </g>
+
+        <!-- head -->
+        <ellipse cx="55" cy="-20" rx="24" ry="20" fill="#e87a3a" stroke="#5a2a10" stroke-width="1.8"/>
+
+        <!-- ears -->
+        <path d="M 41 -35 L 37 -45 L 49 -36 Z" fill="#e87a3a" stroke="#5a2a10" stroke-width="1.4"/>
+        <path d="M 69 -35 L 73 -45 L 61 -36 Z" fill="#e87a3a" stroke="#5a2a10" stroke-width="1.4"/>
+        <path d="M 41 -35 L 39 -40 L 47 -36 Z" fill="#5a2a10"/>
+        <path d="M 69 -35 L 71 -40 L 63 -36 Z" fill="#5a2a10"/>
+
+        <!-- forehead stripes -->
+        <path d="M 50 -32 L 52 -22" stroke="#0a0a0a" stroke-width="3" stroke-linecap="round" fill="none"/>
+        <path d="M 60 -32 L 58 -22" stroke="#0a0a0a" stroke-width="3" stroke-linecap="round" fill="none"/>
+
+        <!-- cheek stripes -->
+        <path d="M 37 -15 L 41 -8" stroke="#0a0a0a" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+        <path d="M 73 -15 L 69 -8" stroke="#0a0a0a" stroke-width="2.5" stroke-linecap="round" fill="none"/>
+
+        <!-- eyes -->
+        <ellipse cx="47" cy="-22" rx="4.5" ry="3.5" fill="#fff200"/>
+        <ellipse cx="63" cy="-22" rx="4.5" ry="3.5" fill="#fff200"/>
+        <ellipse cx="48" cy="-22" rx="1.2" ry="3" fill="#0a0a0a"/>
+        <ellipse cx="64" cy="-22" rx="1.2" ry="3" fill="#0a0a0a"/>
+
+        <!-- snout -->
+        <ellipse cx="55" cy="-8" rx="13" ry="9" fill="#fdf6e3" stroke="#5a2a10" stroke-width="1.2"/>
+
+        <!-- nose -->
+        <path d="M 51 -12 L 59 -12 L 55 -8 Z" fill="#0a0a0a"/>
+
+        <!-- mouth open -->
+        <path d="M 51 -2 Q 55 6 59 -2" fill="#5a1010" stroke="#1a0a0a" stroke-width="1.2"/>
+
+        <!-- fangs -->
+        <polygon points="53,-1 54.5,4 56,-1" fill="#fdf6e3"/>
+        <polygon points="57,-1 58,4 59,-1" fill="#fdf6e3"/>
+
+        <!-- whiskers -->
+        <g stroke="#fdf6e3" stroke-width="0.8" opacity="0.85">
+          <line x1="47" y1="-5" x2="27" y2="-8"/>
+          <line x1="47" y1="-2" x2="27" y2="-2"/>
+          <line x1="63" y1="-5" x2="83" y2="-8"/>
+          <line x1="63" y1="-2" x2="83" y2="-2"/>
+        </g>
+      </g>
+
+      <!-- ROBOT (frightened) -->
+      <g transform="translate(420, 320) scale(2.0)">
+        <line x1="0" y1="-30" x2="0" y2="-22" stroke="#aac4ec" stroke-width="1.6"/>
+        <circle cx="0" cy="-32" r="2.5" fill="#aac4ec"/>
+        <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+        <circle cx="-5" cy="-13" r="2.8" fill="#fdf6e3"/>
+        <circle cx="5" cy="-13" r="2.8" fill="#fdf6e3"/>
+        <circle cx="-5" cy="-12" r="1.4" fill="#1f3a6e"/>
+        <circle cx="5" cy="-12" r="1.4" fill="#1f3a6e"/>
+        <path d="M -5 -5 q 1.5 -2 3 0 q 1.5 2 3 0 q 1.5 -2 3 0" stroke="#1f3a6e" stroke-width="1.4" fill="none"/>
+        <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+        <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+        <rect x="-20" y="2" width="6" height="14" rx="2" fill="#1f3a6e" transform="rotate(-8 -17 9)"/>
+        <rect x="14" y="2" width="6" height="14" rx="2" fill="#1f3a6e" transform="rotate(8 17 9)"/>
+        <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e" transform="rotate(-15 -6 22)"/>
+        <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e" transform="rotate(15 6 22)"/>
+      </g>
+
+      <ellipse cx="420" cy="348" rx="35" ry="5" fill="#cce8a0" opacity="0.06"/>
+    </svg>
+
+    <p style="font-size: 22px; font-style: italic; color: var(--beamer-blue); text-align: center; max-width: 920px; margin: 0; line-height: 1.4;">
+      Cognitive strategies should be evaluated by their success in helping people (or even nonhuman animals) achieve their goals (including epistemic goals) within specific contexts.
+    </p>
+
+  </div>
+
+  <div class="footline">opening &mdash; ecological rationality (Douven 2025)</div>
+  <div class="pagenum">20 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 22 — STRATEGY SELECTION                                           -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">The strategy selection problem</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 84%; gap: 22px;">
+
+    <svg viewBox="0 0 800 400" preserveAspectRatio="xMidYMid meet"
+         xmlns="http://www.w3.org/2000/svg"
+         style="width: 100%; max-width: 880px; height: auto; max-height: 420px;
+                border-radius: 4px; box-shadow: var(--frame-shadow); display: block;">
+      <defs>
+        <linearGradient id="roomBg" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#f5f8fc"/>
+          <stop offset="100%" stop-color="#e7eef8"/>
+        </linearGradient>
+      </defs>
+
+      <rect width="800" height="400" fill="url(#roomBg)"/>
+      <path d="M 0 320 L 800 320 L 800 400 L 0 400 Z" fill="#cdd6e0"/>
+      <ellipse cx="540" cy="340" rx="160" ry="10" fill="#000" opacity="0.08"/>
+      <ellipse cx="220" cy="340" rx="40" ry="6" fill="#000" opacity="0.08"/>
+
+      <!-- TOOLBOX -->
+      <g transform="translate(540, 285)">
+        <rect x="-110" y="0" width="220" height="55" rx="4" fill="#b22222" stroke="#7a1717" stroke-width="2"/>
+        <line x1="-55" y1="0" x2="-55" y2="55" stroke="#7a1717" stroke-width="1" opacity="0.7"/>
+        <line x1="0" y1="0" x2="0" y2="55" stroke="#7a1717" stroke-width="1" opacity="0.7"/>
+        <line x1="55" y1="0" x2="55" y2="55" stroke="#7a1717" stroke-width="1" opacity="0.7"/>
+        <line x1="-110" y1="0" x2="110" y2="0" stroke="#5a1010" stroke-width="2.5"/>
+
+        <g transform="rotate(-30, -110, 0)">
+          <rect x="-110" y="-22" width="220" height="22" rx="3" fill="#9a1d1d" stroke="#7a1717" stroke-width="2"/>
+          <rect x="-30" y="-32" width="60" height="8" rx="2" fill="#7a1717"/>
+        </g>
+
+        <!-- hammer -->
+        <g transform="translate(-83, 0)">
+          <rect x="-3" y="-38" width="6" height="50" fill="#7d5a3a" stroke="#5a4124" stroke-width="0.8"/>
+          <rect x="-15" y="-44" width="28" height="14" rx="2" fill="#9a9a9a" stroke="#666" stroke-width="1.2"/>
+          <rect x="-15" y="-44" width="8" height="14" fill="#7a7a7a"/>
+        </g>
+        <!-- screwdriver -->
+        <g transform="translate(-28, 0)">
+          <rect x="-4" y="-34" width="8" height="22" rx="2" fill="#d9534f" stroke="#a3403a" stroke-width="0.8"/>
+          <rect x="-2" y="-12" width="4" height="24" fill="#bbb"/>
+        </g>
+        <!-- wrench -->
+        <g transform="translate(28, 0)">
+          <rect x="-3" y="-30" width="6" height="40" fill="#a5a5a5" stroke="#777" stroke-width="0.8"/>
+          <path d="M -10 -38 a 10 10 0 0 1 20 0 l 0 6 a 4 4 0 0 1 -4 4 l -2 0 l 0 -6 a 4 4 0 0 0 -8 0 l 0 6 l -2 0 a 4 4 0 0 1 -4 -4 z" fill="#a5a5a5" stroke="#777" stroke-width="0.8"/>
+        </g>
+        <!-- saw -->
+        <g transform="translate(83, 0)">
+          <path d="M -8 -38 q -2 -6 6 -8 q 14 -2 14 8 l 0 6 l -8 0 l -4 6 l -8 0 z" fill="#7d5a3a" stroke="#5a4124" stroke-width="0.8"/>
+          <rect x="4" y="-32" width="24" height="6" fill="#cccccc" stroke="#888" stroke-width="0.6"/>
+          <path d="M 4 -26 L 6 -22 L 8 -26 L 10 -22 L 12 -26 L 14 -22 L 16 -26 L 18 -22 L 20 -26 L 22 -22 L 24 -26 L 26 -22 L 28 -26 Z" fill="#cccccc" stroke="#888" stroke-width="0.6"/>
+        </g>
+      </g>
+
+      <!-- ROBOT -->
+      <g transform="translate(220, 285) scale(2.4)">
+        <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+        <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+        <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+        <circle cx="-5" cy="-13" r="2.8" fill="#fdf6e3"/>
+        <circle cx="5" cy="-13" r="2.8" fill="#fdf6e3"/>
+        <circle cx="-3" cy="-12" r="1.4" fill="#1f3a6e"/>
+        <circle cx="7" cy="-12" r="1.4" fill="#1f3a6e"/>
+        <line x1="-4" y1="-5" x2="4" y2="-5" stroke="#1f3a6e" stroke-width="1.4"/>
+        <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+        <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+        <line x1="11" y1="3" x2="32" y2="-2" stroke="#1f3a6e" stroke-width="5.5" stroke-linecap="round"/>
+        <circle cx="32" cy="-2" r="3" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.4"/>
+        <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+        <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+        <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+      </g>
+
+      <!-- THOUGHT BUBBLE -->
+      <g transform="translate(310, 150)">
+        <ellipse cx="-55" cy="55" rx="6" ry="4.5" fill="white" stroke="#1f3a6e" stroke-width="1.6"/>
+        <ellipse cx="-65" cy="80" rx="3.5" ry="2.6" fill="white" stroke="#1f3a6e" stroke-width="1.2"/>
+        <ellipse cx="0" cy="0" rx="56" ry="42" fill="white" stroke="#1f3a6e" stroke-width="2"/>
+        <text x="0" y="18" text-anchor="middle" font-size="56" font-weight="700" fill="#1f3a6e" font-family="serif">?</text>
+      </g>
+    </svg>
+
+    <p style="font-size: 24px; font-style: italic; color: var(--beamer-blue); text-align: center; max-width: 920px; margin: 0; line-height: 1.4;">
+      How does a cognitive system identify which tool is appropriate for which task?
+    </p>
+
+  </div>
+
+  <div class="footline">opening &mdash; strategy selection (Rieskamp &amp; Otto 2006; Douven 2025)</div>
+  <div class="pagenum">21 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Control problems</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; justify-content: center; margin-top: 4px;">
+    <img src="images/d4rl.gif" alt="D4RL benchmark agents"
+         style="max-width: 880px; max-height: 360px; width: auto; height: auto; object-fit: contain;
+                display: block;
+                border: 1.5px solid var(--grid); border-radius: 4px; box-shadow: var(--frame-shadow);">
+  </div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 16px;">
+    <div class="concept-block blue" style="margin-top: 0;">
+      <div class="head">A control problem</div>
+      <div class="body" style="font-size: 15px; margin-top: 4px;">
+        <ul style="margin: 2px 0; padding-left: 22px;">
+          <li>A system whose <em>state</em> changes over time.</li>
+          <li>An agent with a range of available <em>actions</em> that influence how it changes.</li>
+          <li>An <em>objective</em> the agent wants the system to reach or maintain.</li>
+          <li>Pick actions over time so the system evolves toward the objective.</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="concept-block warm" style="margin-top: 0;">
+      <div class="head">Examples</div>
+      <div class="body" style="font-size: 14px; margin-top: 2px;">
+        <ul style="margin: 2px 0; padding-left: 22px;">
+          <li><strong>Thermostat.</strong> Heater on/off to hold room temperature near a setpoint.</li>
+          <li><strong>Cruise control.</strong> Throttle and brake to hold a target speed.</li>
+          <li><strong>Autopilot.</strong> Deflect control surfaces to fly a planned trajectory.</li>
+          <li><strong>Reinforcement learning.</strong> Learn the strategy from experience when the dynamics and objective aren't known up front.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <div class="footline">control problem &mdash; state + available actions + objective</div>
+  <div class="pagenum">22 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Reinforcement learning as a control problem</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; justify-content: center; align-items: center; margin-top: 18px; height: 78%;">
+    <svg viewBox="0 0 880 380" preserveAspectRatio="xMidYMid meet"
+         style="width: 100%; max-width: 1040px; height: auto; max-height: 560px; display: block;">
+      <defs>
+        <marker id="arrRL" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#1c1c1c"/>
+        </marker>
+      </defs>
+
+      <!-- Agent box -->
+      <rect x="50" y="90" width="320" height="200" rx="12" fill="#e7eef8" stroke="#1f3a6e" stroke-width="2.6"/>
+      <text x="210" y="146" text-anchor="middle" font-size="30" font-weight="700" fill="#1f3a6e">Agent</text>
+      <text x="210" y="190" text-anchor="middle" font-size="20" fill="#1c1c1c">policy π(a | s)</text>
+      <text x="210" y="222" text-anchor="middle" font-size="20" fill="#1c1c1c">value Q(s, a)</text>
+      <text x="210" y="258" text-anchor="middle" font-size="16" font-style="italic" fill="#5a5a5a">trained from experience</text>
+
+      <!-- Environment box -->
+      <rect x="510" y="90" width="320" height="200" rx="12" fill="#fdf6e3" stroke="#b58900" stroke-width="2.6"/>
+      <text x="670" y="146" text-anchor="middle" font-size="30" font-weight="700" fill="#b58900">Environment</text>
+      <text x="670" y="190" text-anchor="middle" font-size="20" fill="#1c1c1c">dynamics P(s′ | s, a)</text>
+      <text x="670" y="222" text-anchor="middle" font-size="20" fill="#1c1c1c">reward r(s, a)</text>
+      <text x="670" y="258" text-anchor="middle" font-size="16" font-style="italic" fill="#5a5a5a">partially unknown to the agent</text>
+
+      <!-- Action arrow: agent → env (upper) -->
+      <line x1="370" y1="146" x2="508" y2="146" stroke="#1c1c1c" stroke-width="3" marker-end="url(#arrRL)"/>
+      <text x="439" y="130" text-anchor="middle" font-size="21" font-style="italic" fill="#1c1c1c">action a</text>
+
+      <!-- State / reward arrow: env → agent (lower, curved) -->
+      <path d="M 510 244 C 440 360, 440 360, 370 244" stroke="#1c1c1c" stroke-width="3" fill="none" marker-end="url(#arrRL)"/>
+      <text x="440" y="372" text-anchor="middle" font-size="21" font-style="italic" fill="#1c1c1c">next state s′, reward r</text>
+    </svg>
+  </div>
+
+  <div class="footline">control loop &mdash; agent acts, environment responds</div>
+  <div class="pagenum">23 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- NEW USE CASE FOR IP LOSS FUNCTIONS                              -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">New use case for IP loss functions</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 32px; align-items: center; margin-top: 24px; height: 80%;">
+
+    <!-- LEFT: photo of a real game controller with an IP-loss label overlaid,
+         and an SVG knob beneath. -->
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px;">
+
+      <!-- Controller photo with overlaid text box -->
+      <div style="position: relative; display: inline-block; max-width: 440px; width: 100%;">
+        <img src="controller.jpg" alt="game controller"
+             style="width: 100%; height: auto; display: block;
+                    border: 1.5px solid var(--grid); border-radius: 6px; box-shadow: var(--frame-shadow);"/>
+        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+                    background: #fdf6e3; border: 2.4px solid #b58900; border-radius: 8px;
+                    padding: 10px 18px; box-shadow: 0 2px 6px rgba(0,0,0,0.18);
+                    font-size: 20px; font-weight: 700; color: #b58900; text-align: center;
+                    line-height: 1.15; white-space: nowrap;">
+          IP loss<br/>function
+        </div>
+      </div>
+
+      <!-- Knob SVG -->
+      <svg viewBox="0 0 220 160" preserveAspectRatio="xMidYMid meet"
+           style="width: 100%; max-width: 240px; height: auto; display: block;">
+        <defs>
+          <radialGradient id="knobBody" cx="50%" cy="40%" r="60%">
+            <stop offset="0%" stop-color="#fafafa"/>
+            <stop offset="65%" stop-color="#c4c8d2"/>
+            <stop offset="100%" stop-color="#6b7180"/>
+          </radialGradient>
+        </defs>
+
+        <!-- Tick marks around the knob -->
+        <g stroke="#1c1c1c" stroke-width="2" stroke-linecap="round">
+          <line x1="110" y1="14"  x2="110" y2="24"/>
+          <line x1="46"  y1="42"  x2="54"  y2="50"/>
+          <line x1="22"  y1="78"  x2="32"  y2="78"/>
+          <line x1="46"  y1="114" x2="54"  y2="106"/>
+          <line x1="174" y1="42"  x2="166" y2="50"/>
+          <line x1="198" y1="78"  x2="188" y2="78"/>
+          <line x1="174" y1="114" x2="166" y2="106"/>
+        </g>
+
+        <!-- Knob body -->
+        <circle cx="110" cy="78" r="48" fill="url(#knobBody)" stroke="#1c1c1c" stroke-width="2.2"/>
+        <circle cx="110" cy="78" r="36" fill="none" stroke="#1c1c1c" stroke-width="0.8" opacity="0.4"/>
+
+        <!-- Indicator pointing up-right (a setting between min and max) -->
+        <line x1="110" y1="78" x2="142" y2="50" stroke="#1c1c1c" stroke-width="3.4" stroke-linecap="round"/>
+        <circle cx="110" cy="78" r="4" fill="#1c1c1c"/>
+
+        <!-- Min / max labels -->
+        <text x="22"  y="142" font-size="13" fill="#1c1c1c" text-anchor="start">min</text>
+        <text x="198" y="142" font-size="13" fill="#1c1c1c" text-anchor="end">max</text>
+        <text x="110" y="156" font-size="13" font-style="italic" fill="#5a5a5a" text-anchor="middle">imprecision knob</text>
+      </svg>
+    </div>
+
+    <!-- RIGHT: profx.gif on top, scream.jpg beneath -->
+    <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px;">
+      <img src="profx.gif" alt="prof X"
+           style="width: 100%; max-width: 360px; height: auto; max-height: 250px; object-fit: contain;
+                  border: 1.5px solid var(--grid); border-radius: 4px; box-shadow: var(--frame-shadow);"/>
+      <img src="scream.jpg" alt="The Scream"
+           style="width: 100%; max-width: 360px; height: auto; max-height: 250px; object-fit: contain;
+                  border: 1.5px solid var(--grid); border-radius: 4px; box-shadow: var(--frame-shadow);"/>
+    </div>
+
+  </div>
+
+  <div class="footline">a video game agent learns its own uncertainty through an IP loss</div>
+  <div class="pagenum">24 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- SECTION DIVIDER: IV -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100%; text-align: center;">
+    <div style="font-size: 22px; font-style: italic; color: var(--soft); letter-spacing: 3px; margin-bottom: 30px;">Section IV</div>
+    <div style="height: 2px; width: 140px; background: var(--beamer-blue); opacity: 0.5; margin-bottom: 36px;"></div>
+    <div style="font-size: 50px; font-weight: 700; color: var(--beamer-blue); line-height: 1.2; max-width: 900px;">Interval DQN</div>
+  </div>
+  <div class="pagenum">25 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Standard DQN</div>
+  <div class="frame-rule"></div>
+
+  <svg width="0" height="0" style="position: absolute;">
+    <defs>
+      <marker id="aRArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#1c1c1c"/>
+      </marker>
+    </defs>
+  </svg>
+
+  <div style="display: flex; flex-direction: column; gap: 18px; margin-top: 14px; align-items: center;">
+    <div style="display: flex; justify-content: center; gap: 18px; width: 100%;">
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">1</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">see s</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(60, 165) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><rect x="120" y="100" width="68" height="72" rx="6" fill="#fdf6e3" stroke="#b58900" stroke-width="1.6"/><text x="154" y="120" font-size="11" fill="#b58900" text-anchor="middle" font-weight="700">Env</text><text x="154" y="146" font-size="18" font-style="italic" fill="#1c1c1c" text-anchor="middle">s</text><circle cx="135" cy="156" r="2" fill="#b58900"/><circle cx="154" cy="160" r="2" fill="#b58900"/><circle cx="172" cy="156" r="2" fill="#b58900"/><line x1="118" y1="140" x2="82" y2="148" stroke="#1c1c1c" stroke-width="1.4" stroke-dasharray="3 3"/></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Environment hands a state s.</div>
+</div>
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">2</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">score actions</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(100, 180) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><ellipse cx="42" cy="85" rx="34" ry="22" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.4"/><text x="42" y="89" font-size="13" fill="#1f3a6e" text-anchor="middle" font-weight="600">Q1 = 4.2</text><ellipse cx="100" cy="58" rx="34" ry="22" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.4"/><text x="100" y="62" font-size="13" fill="#1f3a6e" text-anchor="middle" font-weight="600">Q2 = 1.7</text><ellipse cx="158" cy="85" rx="34" ry="22" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.4"/><text x="158" y="89" font-size="13" fill="#1f3a6e" text-anchor="middle" font-weight="600">Q3 = -0.3</text><circle cx="100" cy="140" r="2.4" fill="#aac4ec"/><circle cx="100" cy="130" r="1.6" fill="#aac4ec"/></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Q-net: one number per action.</div>
+</div>
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">3</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">pick best</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(100, 180) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><ellipse cx="42" cy="85" rx="38" ry="24" fill="#fff5e0" stroke="#b58900" stroke-width="2.4"/><text x="42" y="89" font-size="13" fill="#b58900" text-anchor="middle" font-weight="700">Q1 = 4.2</text><text x="42" y="60" font-size="13" fill="#b58900" text-anchor="middle">&larr; max</text><ellipse cx="100" cy="58" rx="32" ry="20" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.2" opacity="0.55"/><text x="100" y="62" font-size="12" fill="#1f3a6e" text-anchor="middle" opacity="0.55">Q2 = 1.7</text><ellipse cx="158" cy="85" rx="32" ry="20" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.2" opacity="0.55"/><text x="158" y="89" font-size="12" fill="#1f3a6e" text-anchor="middle" opacity="0.55">Q3 = -0.3</text><line x1="100" y1="160" x2="55" y2="105" stroke="#b58900" stroke-width="1.6" marker-end="url(#aRArrow)"/></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Act a = argmax<sub>a</sub> Q(s, a).</div>
+</div>
+    </div>
+    <div style="display: flex; justify-content: center; gap: 18px; width: 100%;">
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">4</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">step</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(50, 165) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><rect x="120" y="100" width="68" height="72" rx="6" fill="#fdf6e3" stroke="#b58900" stroke-width="1.6"/><text x="154" y="120" font-size="11" fill="#b58900" text-anchor="middle" font-weight="700">Env</text><text x="154" y="146" font-size="14" fill="#1c1c1c" text-anchor="middle">r, s′</text><line x1="80" y1="140" x2="118" y2="135" stroke="#1c1c1c" stroke-width="1.5" marker-end="url(#aRArrow)"/><text x="99" y="128" font-size="11" font-style="italic" fill="#1c1c1c" text-anchor="middle">a</text><path d="M 118 155 C 100 175, 90 180, 80 165" fill="none" stroke="#b58900" stroke-width="1.5" marker-end="url(#aRArrow)"/><text x="100" y="190" font-size="11" font-style="italic" fill="#b58900" text-anchor="middle">r, s′</text></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Environment returns r and s′.</div>
+</div>
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">5</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">update</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(50, 175) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><rect x="92" y="60" width="100" height="100" rx="6" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.4"/><text x="142" y="92" font-size="12" fill="#1f3a6e" text-anchor="middle" font-weight="700">target T</text><text x="142" y="112" font-size="11" fill="#1c1c1c" text-anchor="middle">r + &gamma; max</text><text x="142" y="128" font-size="11" fill="#1c1c1c" text-anchor="middle">Q(s′, a′)</text><line x1="142" y1="140" x2="142" y2="148" stroke="#1c1c1c" stroke-width="1.2"/><text x="142" y="158" font-size="11" font-style="italic" fill="#b22222" text-anchor="middle">(Q &minus; T)²</text><line x1="92" y1="135" x2="80" y2="145" stroke="#1c1c1c" stroke-width="1.4" stroke-dasharray="3 3" marker-end="url(#aRArrow)"/></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">MSE: pull Q(s, a) toward T.</div>
+</div>
+  </div>
+
+  </div>
+
+  <div class="footline">standard DQN training loop &mdash; one panel per step</div>
+  <div class="pagenum">26 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Credal Interval DQN</div>
+  <div class="frame-rule"></div>
+
+  <svg width="0" height="0" style="position: absolute;">
+    <defs>
+      <marker id="bRArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#1c1c1c"/>
+      </marker>
+    </defs>
+  </svg>
+
+  <div style="display: flex; flex-direction: column; gap: 18px; margin-top: 14px; align-items: center;">
+    <div style="display: flex; justify-content: center; gap: 18px; width: 100%;">
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">1</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">see s</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(60, 165) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><rect x="120" y="100" width="68" height="72" rx="6" fill="#fdf6e3" stroke="#b58900" stroke-width="1.6"/><text x="154" y="120" font-size="11" fill="#b58900" text-anchor="middle" font-weight="700">Env</text><text x="154" y="146" font-size="18" font-style="italic" fill="#1c1c1c" text-anchor="middle">s</text><circle cx="135" cy="156" r="2" fill="#b58900"/><circle cx="154" cy="160" r="2" fill="#b58900"/><circle cx="172" cy="156" r="2" fill="#b58900"/><line x1="118" y1="140" x2="82" y2="148" stroke="#1c1c1c" stroke-width="1.4" stroke-dasharray="3 3"/></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Environment hands a state s.</div>
+</div>
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">2</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">score intervals</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(100, 180) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><ellipse cx="42" cy="85" rx="36" ry="24" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.4"/><text x="42" y="78" font-size="11" fill="#1f3a6e" text-anchor="middle" font-weight="700">[3.5, 4.9]</text><line x1="22" y1="92" x2="62" y2="92" stroke="#1f3a6e" stroke-width="2"/><line x1="22" y1="88" x2="22" y2="96" stroke="#1f3a6e" stroke-width="2"/><line x1="62" y1="88" x2="62" y2="96" stroke="#1f3a6e" stroke-width="2"/><ellipse cx="100" cy="58" rx="36" ry="24" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.4"/><text x="100" y="51" font-size="11" fill="#1f3a6e" text-anchor="middle" font-weight="700">[1.2, 2.1]</text><line x1="82" y1="65" x2="118" y2="65" stroke="#1f3a6e" stroke-width="2"/><line x1="82" y1="61" x2="82" y2="69" stroke="#1f3a6e" stroke-width="2"/><line x1="118" y1="61" x2="118" y2="69" stroke="#1f3a6e" stroke-width="2"/><ellipse cx="158" cy="85" rx="38" ry="24" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.4"/><text x="158" y="78" font-size="11" fill="#1f3a6e" text-anchor="middle" font-weight="700">[-0.8, 0.2]</text><line x1="138" y1="92" x2="178" y2="92" stroke="#1f3a6e" stroke-width="2"/><line x1="138" y1="88" x2="138" y2="96" stroke="#1f3a6e" stroke-width="2"/><line x1="178" y1="88" x2="178" y2="96" stroke="#1f3a6e" stroke-width="2"/><text x="183" y="22" font-size="20" fill="#b22222">&#9733;</text></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Q-net: an <em>interval</em> per action.</div>
+</div>
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">3</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">Hurwicz pick</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(100, 180) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><ellipse cx="42" cy="85" rx="38" ry="24" fill="#fff5e0" stroke="#b58900" stroke-width="2.4"/><text x="42" y="78" font-size="11" fill="#b58900" text-anchor="middle" font-weight="700">[3.5, 4.9]</text><line x1="22" y1="92" x2="62" y2="92" stroke="#b58900" stroke-width="2"/><line x1="22" y1="88" x2="22" y2="96" stroke="#b58900" stroke-width="2"/><line x1="62" y1="88" x2="62" y2="96" stroke="#b58900" stroke-width="2"/><circle cx="40" cy="92" r="3" fill="#b58900"/><text x="42" y="50" font-size="11" fill="#b58900" text-anchor="middle">&larr; Hurwicz max</text><ellipse cx="158" cy="85" rx="34" ry="22" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.2" opacity="0.55"/><text x="158" y="80" font-size="11" fill="#1f3a6e" text-anchor="middle" opacity="0.55">[-0.8, 0.2]</text><text x="100" y="120" font-size="11" fill="#1c1c1c" text-anchor="middle" font-style="italic">Qℓ + c·(Qᵤ − Qℓ)</text><circle cx="100" cy="138" r="11" fill="#fdf6e3" stroke="#b58900" stroke-width="1.5"/><text x="100" y="142" font-size="11" font-weight="700" fill="#b58900" text-anchor="middle">c</text><text x="183" y="22" font-size="20" fill="#b22222">&#9733;</text></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Act a* = argmax<sub>a</sub> [Q<sub>ℓ</sub> + c·(Q<sub>u</sub> &minus; Q<sub>ℓ</sub>)].</div>
+</div>
+    </div>
+    <div style="display: flex; justify-content: center; gap: 18px; width: 100%;">
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">4</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">step</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(50, 165) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><rect x="120" y="100" width="68" height="72" rx="6" fill="#fdf6e3" stroke="#b58900" stroke-width="1.6"/><text x="154" y="120" font-size="11" fill="#b58900" text-anchor="middle" font-weight="700">Env</text><text x="154" y="146" font-size="14" fill="#1c1c1c" text-anchor="middle">r, s′</text><line x1="80" y1="140" x2="118" y2="135" stroke="#1c1c1c" stroke-width="1.5" marker-end="url(#aRArrow)"/><text x="99" y="128" font-size="11" font-style="italic" fill="#1c1c1c" text-anchor="middle">a</text><path d="M 118 155 C 100 175, 90 180, 80 165" fill="none" stroke="#b58900" stroke-width="1.5" marker-end="url(#aRArrow)"/><text x="100" y="190" font-size="11" font-style="italic" fill="#b58900" text-anchor="middle">r, s′</text></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Environment returns r and s′.</div>
+</div>
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">5</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">update + self-tune</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(45, 178) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><rect x="86" y="56" width="106" height="116" rx="6" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.4"/><text x="139" y="74" font-size="11" fill="#1f3a6e" text-anchor="middle" font-weight="700">target [Tℓ, Tᵤ]</text><line x1="106" y1="86" x2="172" y2="86" stroke="#1f3a6e" stroke-width="2.2"/><line x1="106" y1="81" x2="106" y2="91" stroke="#1f3a6e" stroke-width="2.2"/><line x1="172" y1="81" x2="172" y2="91" stroke="#1f3a6e" stroke-width="2.2"/><text x="139" y="108" font-size="10" fill="#b22222" text-anchor="middle" font-style="italic">interval loss L(·; t)</text><rect x="100" y="120" width="80" height="14" rx="3" fill="#fdf6e3" stroke="#b58900" stroke-width="1.3"/><rect x="100" y="120" width="68" height="14" rx="3" fill="#b58900" opacity="0.55"/><text x="140" y="131" font-size="9" fill="#1c1c1c" text-anchor="middle" font-weight="700">coverage 0.85</text><circle cx="139" cy="153" r="11" fill="#fdf6e3" stroke="#b58900" stroke-width="1.5"/><text x="139" y="157" font-size="11" font-weight="700" fill="#b58900" text-anchor="middle">t</text><text x="120" y="156" font-size="10" fill="#b58900">&loz;</text><text x="183" y="22" font-size="20" fill="#b22222">&#9733;</text></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Interval loss. Coverage tracker adjusts t.</div>
+</div>
+  </div>
+
+  </div>
+
+  <div class="footline">credal interval DQN training loop &mdash; <span style="color: #b22222;">&#9733;</span> marks what's new vs. standard DQN</div>
+  <div class="pagenum">27 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 16 — DEEP Q-NETWORKS EXPLAINER                                     -->
+<!-- ============================================================ -->
+<!-- THE IP LOSS FUNCTION                                            -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">The IP loss function</div>
+  <div class="frame-rule"></div>
+
+  <p class="body center" style="font-size: 22px; margin-top: 28px;">
+    For an interval prediction $[\ell, u]$ and a target $v$:
+  </p>
+
+  <p class="body center" style="font-size: 22px; margin-top: 18px;">
+    $L(\ell, u, v;\, t) \;=\; t \cdot \mathbf{1}_{v \notin [\ell, u]} \cdot \min\!\bigl((v - \ell)^2, (v - u)^2\bigr) + (1 - t) \cdot \max\!\bigl((v - \ell)^2, (v - u)^2\bigr)$
+  </p>
+
+  <p class="body center" style="font-size: 19px; margin-top: 18px;">
+    Reward coverage; penalise width. The coverage tracker drives $t$ toward target coverage $0.85$.
+  </p>
+
+  <!-- Coverage-tracker feedback graphic -->
+  <div style="display: flex; justify-content: center; margin-top: 22px;">
+    <svg viewBox="0 0 940 270" preserveAspectRatio="xMidYMid meet"
+         style="width: 100%; max-width: 940px; height: auto; max-height: 280px; display: block;">
+      <defs>
+        <marker id="trkArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#1c1c1c"/>
+        </marker>
+        <radialGradient id="trkKnob" cx="50%" cy="40%" r="60%">
+          <stop offset="0%" stop-color="#fafafa"/>
+          <stop offset="65%" stop-color="#c4c8d2"/>
+          <stop offset="100%" stop-color="#6b7180"/>
+        </radialGradient>
+      </defs>
+
+      <!-- ===== LEFT: coverage tracker box ===== -->
+      <rect x="20" y="40" width="320" height="200" rx="10" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="2"/>
+      <text x="180" y="68" text-anchor="middle" font-size="18" font-weight="700" fill="#1f3a6e">coverage tracker</text>
+
+      <!-- coverage bar -->
+      <rect x="50" y="110" width="260" height="22" rx="4" fill="#fdf6e3" stroke="#b58900" stroke-width="1.6"/>
+      <!-- 'too low' region (red, below target) -->
+      <rect x="50" y="110" width="156" height="22" fill="#fbe3e3" opacity="0.7"/>
+      <!-- 'on target' tick -->
+      <line x1="271" y1="100" x2="271" y2="142" stroke="#2c7a3f" stroke-width="2.5"/>
+      <text x="271" y="156" font-size="13" font-weight="700" fill="#2c7a3f" text-anchor="middle">0.85</text>
+      <text x="50" y="156" font-size="12" fill="#5a5a5a">0</text>
+      <text x="310" y="156" font-size="12" fill="#5a5a5a" text-anchor="end">1</text>
+      <text x="180" y="100" font-size="13" font-style="italic" fill="#5a5a5a" text-anchor="middle">recent coverage</text>
+
+      <!-- two example states -->
+      <circle cx="120" cy="121" r="6" fill="#b22222" stroke="#1c1c1c" stroke-width="1"/>
+      <text x="120" y="186" font-size="13" fill="#b22222" text-anchor="middle" font-weight="700">too low</text>
+      <circle cx="298" cy="121" r="6" fill="#b58900" stroke="#1c1c1c" stroke-width="1"/>
+      <text x="298" y="186" font-size="13" fill="#b58900" text-anchor="middle" font-weight="700">too high</text>
+
+      <text x="180" y="222" text-anchor="middle" font-size="13" font-style="italic" fill="#5a5a5a">
+        running fraction of targets inside $[\ell, u]$
+      </text>
+
+      <!-- ===== CENTER: branching arrows ===== -->
+      <!-- upper arrow: too low -> turn up -->
+      <path d="M 340 130 C 430 100, 510 80, 600 80" stroke="#b22222" stroke-width="2.4" fill="none" marker-end="url(#trkArrow)"/>
+      <text x="470" y="50" text-anchor="middle" font-size="14" font-weight="700" fill="#b22222">coverage &lt; 0.85 → turn t ↑</text>
+      <text x="470" y="68" text-anchor="middle" font-size="12" font-style="italic" fill="#5a5a5a">(penalise misses more → wider intervals)</text>
+
+      <!-- lower arrow: too high -> turn down -->
+      <path d="M 340 160 C 430 200, 510 220, 600 220" stroke="#b58900" stroke-width="2.4" fill="none" marker-end="url(#trkArrow)"/>
+      <text x="470" y="262" text-anchor="middle" font-size="14" font-weight="700" fill="#b58900">coverage &gt; 0.85 → turn t ↓</text>
+      <text x="470" y="244" text-anchor="middle" font-size="12" font-style="italic" fill="#5a5a5a">(penalise width more → tighter intervals)</text>
+
+      <!-- ===== RIGHT: imprecision knob ===== -->
+      <rect x="620" y="40" width="300" height="200" rx="10" fill="#fdf6e3" stroke="#b58900" stroke-width="2"/>
+      <text x="770" y="68" text-anchor="middle" font-size="18" font-weight="700" fill="#b58900">imprecision knob (t)</text>
+
+      <!-- tick marks (top semicircle) -->
+      <g stroke="#1c1c1c" stroke-width="1.8" stroke-linecap="round">
+        <line x1="770" y1="100" x2="770" y2="110"/>
+        <line x1="706" y1="128" x2="714" y2="136"/>
+        <line x1="682" y1="164" x2="692" y2="164"/>
+        <line x1="706" y1="200" x2="714" y2="192"/>
+        <line x1="834" y1="128" x2="826" y2="136"/>
+        <line x1="858" y1="164" x2="848" y2="164"/>
+        <line x1="834" y1="200" x2="826" y2="192"/>
+      </g>
+
+      <!-- knob body -->
+      <circle cx="770" cy="164" r="46" fill="url(#trkKnob)" stroke="#1c1c1c" stroke-width="2"/>
+      <!-- indicator pointing slightly up -->
+      <line x1="770" y1="164" x2="800" y2="138" stroke="#1c1c1c" stroke-width="3.2" stroke-linecap="round"/>
+      <circle cx="770" cy="164" r="4" fill="#1c1c1c"/>
+
+      <!-- rotation hints -->
+      <path d="M 720 130 A 60 60 0 0 1 770 110" fill="none" stroke="#b22222" stroke-width="1.8" marker-end="url(#trkArrow)"/>
+      <text x="708" y="118" font-size="13" font-weight="700" fill="#b22222" text-anchor="end">↑ t</text>
+
+      <path d="M 820 198 A 60 60 0 0 1 770 218" fill="none" stroke="#b58900" stroke-width="1.8" marker-end="url(#trkArrow)"/>
+      <text x="832" y="212" font-size="13" font-weight="700" fill="#b58900" text-anchor="start">↓ t</text>
+    </svg>
+  </div>
+
+  <div class="footline">coverage tracker — closed-loop control of the imprecision parameter $t$</div>
+  <div class="pagenum">28 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- ACTION SELECTION: HURWICZ CRITERION                              -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Action selection: Hurwicz criterion</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 80%; margin: 0 auto;">
+
+    <p class="body center" style="font-size: 24px; margin: 0;">
+      $\pi(s) = \arg\max_a \big[\, Q_\ell(s,a) + c \cdot (Q_u(s,a) - Q_\ell(s,a)) \,\big]$
+    </p>
+
+    <div class="knob" style="margin: 60px auto 8px;"></div>
+    <div class="knob-row">
+      <div class="knob-tick" style="left: 0%;"></div>
+      <div class="knob-label" style="left: 0%;">$c = 0$<br><span class="role">cautious</span></div>
+      <div class="knob-tick" style="left: 50%;"></div>
+      <div class="knob-label" style="left: 50%;">$c = 0.5$<br><span class="role">balanced</span></div>
+      <div class="knob-tick" style="left: 100%;"></div>
+      <div class="knob-label" style="left: 100%;">$c = 1$<br><span class="role">daring</span></div>
+    </div>
+
+    <p class="body center" style="font-size: 19px; margin-top: 60px; max-width: 880px;">
+      <em>Adaptive $c$ at deployment.</em>&nbsp; Make $c$ a decreasing function of the per-state interval width $w(s,a) = Q_u - Q_\ell$: confident states (tight intervals) ride high; wide intervals pull $c \to 0$. No retraining.
+    </p>
+
+  </div>
+
+  <div class="footline">action selection &mdash; Hurwicz combination of $Q_\ell$ and $Q_u$</div>
+  <div class="pagenum">29 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Two ways imprecision enters the model</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; flex-direction: column; justify-content: center; align-items: stretch; height: 80%;">
+    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 36px;">
+    <div style="border: 2px solid var(--warm); border-radius: 8px; padding: 22px 26px; background: #fffcf2;">
+      <div style="font-weight: 700; color: var(--warm); font-size: 24px; margin-bottom: 4px;">① Modeller's input</div>
+      <div style="font-size: 13px; color: var(--muted); font-style: italic; margin-bottom: 16px;">supplied at problem-setup time</div>
+      <p style="font-size: 18px; line-height: 1.55; margin: 0;">
+        An uncertainty set on the environment.<br>
+        For our lander: <em style="color: var(--warm); font-style: italic;">wind&nbsp;$\in [0, 15]$</em>.<br><br>
+        Used during training as a domain-randomisation sampler &mdash; each episode draws a fresh wind from the set.
+      </p>
+    </div>
+    <div style="border: 2px solid var(--beamer-blue); border-radius: 8px; padding: 22px 26px; background: #f5f8fc;">
+      <div style="font-weight: 700; color: var(--beamer-blue); font-size: 24px; margin-bottom: 4px;">② Learned interval $Q$</div>
+      <div style="font-size: 13px; color: var(--muted); font-style: italic; margin-bottom: 16px;">extracted from training data</div>
+      <p style="font-size: 18px; line-height: 1.55; margin: 0;">
+        The network outputs <em style="color: var(--beamer-blue); font-style: italic;">$[Q_\ell(s,a),\, Q_u(s,a)]$</em> per action.<br>
+        Width varies with the input &mdash; wider where the network is less sure.<br><br>
+        A model-internal uncertainty signal that a scalar-network is structurally incapable of learning.
+      </p>
+    </div>
+  </div>
+
+  <p class="caveat" style="margin-top: 26px; text-align: center;">
+      Both feed one risk knob at deployment.
+    </p>
+  </div>
+
+  <div class="footline">central conceptual point</div>
+  <div class="pagenum">30 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 9 — SETTING 2: LUNARLANDER                                    -->
+<!-- ============================================================ -->
+<!-- IN-DISTRIBUTION ROBOT                                            -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">In distribution &mdash; tight intervals</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; justify-content: center; align-items: center; height: 82%; margin-top: 8px;">
+    <svg viewBox="0 0 800 470" preserveAspectRatio="xMidYMid meet"
+         style="width: 100%; max-width: 960px; height: auto; max-height: 560px; display: block;">
+      <defs>
+        <linearGradient id="skySunny" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#cfe7fa"/>
+          <stop offset="100%" stop-color="#fdf6e3"/>
+        </linearGradient>
+      </defs>
+
+      <!-- sky -->
+      <rect x="0" y="0" width="800" height="400" fill="url(#skySunny)"/>
+
+      <!-- sun -->
+      <g transform="translate(680, 95)">
+        <g stroke="#b58900" stroke-width="3" stroke-linecap="round">
+          <line x1="0" y1="-58" x2="0" y2="-76"/>
+          <line x1="41" y1="-41" x2="54" y2="-54"/>
+          <line x1="58" y1="0" x2="76" y2="0"/>
+          <line x1="41" y1="41" x2="54" y2="54"/>
+          <line x1="0" y1="58" x2="0" y2="76"/>
+          <line x1="-41" y1="41" x2="-54" y2="54"/>
+          <line x1="-58" y1="0" x2="-76" y2="0"/>
+          <line x1="-41" y1="-41" x2="-54" y2="-54"/>
+        </g>
+        <circle r="42" fill="#f5d76e" stroke="#b58900" stroke-width="2.4"/>
+        <!-- smiley sun face -->
+        <circle cx="-13" cy="-6" r="3" fill="#1c1c1c"/>
+        <circle cx="13" cy="-6" r="3" fill="#1c1c1c"/>
+        <path d="M -14 10 Q 0 24 14 10" fill="none" stroke="#1c1c1c" stroke-width="2.4" stroke-linecap="round"/>
+      </g>
+
+      <!-- friendly clouds -->
+      <g fill="white" stroke="#cdd6e0" stroke-width="1.4">
+        <ellipse cx="180" cy="110" rx="44" ry="16"/>
+        <ellipse cx="214" cy="100" rx="32" ry="14"/>
+        <ellipse cx="156" cy="100" rx="22" ry="11"/>
+        <ellipse cx="430" cy="80" rx="38" ry="14"/>
+        <ellipse cx="460" cy="72" rx="24" ry="11"/>
+      </g>
+
+      <!-- grass / ground -->
+      <rect x="0" y="400" width="800" height="70" fill="#a4c673"/>
+      <g stroke="#5e7b3a" stroke-width="2.2" stroke-linecap="round" fill="none">
+        <path d="M 60 416 q 2 -10 6 -14"/>
+        <path d="M 120 420 q -3 -10 -6 -14"/>
+        <path d="M 200 416 q 3 -10 7 -14"/>
+        <path d="M 300 422 q -2 -10 -5 -14"/>
+        <path d="M 540 420 q 4 -10 8 -14"/>
+        <path d="M 640 416 q -3 -10 -7 -14"/>
+        <path d="M 720 422 q 3 -10 6 -14"/>
+      </g>
+      <!-- a few flowers -->
+      <g>
+        <circle cx="80" cy="430" r="5" fill="#e8a3c3"/><circle cx="80" cy="430" r="2" fill="#fdf6e3"/>
+        <circle cx="250" cy="436" r="5" fill="#e8c547"/><circle cx="250" cy="436" r="2" fill="#fdf6e3"/>
+        <circle cx="610" cy="432" r="5" fill="#e8a3c3"/><circle cx="610" cy="432" r="2" fill="#fdf6e3"/>
+      </g>
+
+      <!-- robot (scale 3, center (400, 340)) holding a tight interval above head -->
+      <g transform="translate(400, 340) scale(3)">
+
+      <!-- antenna -->
+      <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+      <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+      <!-- head -->
+      <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+      <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+      <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+      <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+      <!-- body -->
+      <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+      <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+      <!-- long raised arms reaching above head -->
+      <line x1="-13" y1="3" x2="-12" y2="-52" stroke="#1f3a6e" stroke-width="4" stroke-linecap="round"/>
+      <line x1="13"  y1="3" x2="12"  y2="-52" stroke="#1f3a6e" stroke-width="4" stroke-linecap="round"/>
+      <!-- legs -->
+      <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+      <rect x="3"  y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+      </g>
+
+      <!-- tight interval bar held above the robot's head -->
+
+      <line x1="360" y1="172" x2="360" y2="196" stroke="#1f3a6e" stroke-width="4" stroke-linecap="round"/>
+      <line x1="360" y1="172" x2="370" y2="172" stroke="#1f3a6e" stroke-width="4" stroke-linecap="round"/>
+      <line x1="360" y1="196" x2="370" y2="196" stroke="#1f3a6e" stroke-width="4" stroke-linecap="round"/>
+      <line x1="440" y1="172" x2="440" y2="196" stroke="#1f3a6e" stroke-width="4" stroke-linecap="round"/>
+      <line x1="440" y1="172" x2="430" y2="172" stroke="#1f3a6e" stroke-width="4" stroke-linecap="round"/>
+      <line x1="440" y1="196" x2="430" y2="196" stroke="#1f3a6e" stroke-width="4" stroke-linecap="round"/>
+      <line x1="360" y1="184" x2="440" y2="184" stroke="#1f3a6e" stroke-width="4" stroke-linecap="round"/>
+
+    </svg>
+  </div>
+
+  <div class="footline">in-distribution &mdash; the model is confident</div>
+  <div class="pagenum">31 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- OOD ROBOT                                                        -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Out of distribution &mdash; wide intervals</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; justify-content: center; align-items: center; height: 82%; margin-top: 8px;">
+    <svg viewBox="0 0 800 470" preserveAspectRatio="xMidYMid meet"
+         style="width: 100%; max-width: 960px; height: auto; max-height: 560px; display: block;">
+      <defs>
+        <linearGradient id="skyStorm" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#3a4252"/>
+          <stop offset="100%" stop-color="#7a8290"/>
+        </linearGradient>
+      </defs>
+
+      <!-- dark sky -->
+      <rect x="0" y="0" width="800" height="400" fill="url(#skyStorm)"/>
+
+      <!-- dark clouds -->
+      <g fill="#2c3340" stroke="#1c2230" stroke-width="1.4">
+        <ellipse cx="160" cy="70"  rx="80" ry="22"/>
+        <ellipse cx="220" cy="58"  rx="68" ry="20"/>
+        <ellipse cx="110" cy="58"  rx="44" ry="18"/>
+        <ellipse cx="500" cy="80"  rx="84" ry="24"/>
+        <ellipse cx="570" cy="64"  rx="58" ry="20"/>
+        <ellipse cx="440" cy="66"  rx="40" ry="16"/>
+        <ellipse cx="720" cy="74"  rx="50" ry="18"/>
+      </g>
+
+      <!-- lightning bolts -->
+      <polygon points="220,90 200,160 232,160 210,240 268,140 234,140 252,90"
+               fill="#f5d76e" stroke="#b58900" stroke-width="1.8" stroke-linejoin="round"/>
+      <polygon points="610,100 596,150 618,150 600,200 638,134 618,134 628,100"
+               fill="#f5d76e" stroke="#b58900" stroke-width="1.6" stroke-linejoin="round"/>
+
+      <!-- rain (slanted streaks) -->
+      <g stroke="#cfd8e3" stroke-width="1.6" stroke-linecap="round" opacity="0.85">
+        <line x1="40"  y1="120" x2="34"  y2="150"/>
+        <line x1="80"  y1="160" x2="74"  y2="190"/>
+        <line x1="120" y1="200" x2="114" y2="230"/>
+        <line x1="160" y1="240" x2="154" y2="270"/>
+        <line x1="60"  y1="220" x2="54"  y2="250"/>
+        <line x1="300" y1="120" x2="294" y2="150"/>
+        <line x1="340" y1="180" x2="334" y2="210"/>
+        <line x1="380" y1="230" x2="374" y2="260"/>
+        <line x1="100" y1="290" x2="94"  y2="320"/>
+        <line x1="180" y1="320" x2="174" y2="350"/>
+        <line x1="260" y1="280" x2="254" y2="310"/>
+        <line x1="540" y1="140" x2="534" y2="170"/>
+        <line x1="660" y1="180" x2="654" y2="210"/>
+        <line x1="720" y1="240" x2="714" y2="270"/>
+        <line x1="700" y1="320" x2="694" y2="350"/>
+        <line x1="620" y1="300" x2="614" y2="330"/>
+        <line x1="460" y1="290" x2="454" y2="320"/>
+        <line x1="520" y1="340" x2="514" y2="370"/>
+        <line x1="20"  y1="350" x2="14"  y2="380"/>
+        <line x1="780" y1="280" x2="774" y2="310"/>
+      </g>
+
+      <!-- hail (white circles) -->
+      <g fill="#fdfdfd" stroke="#cfd8e3" stroke-width="1">
+        <circle cx="120" cy="240" r="4"/>
+        <circle cx="260" cy="190" r="3.5"/>
+        <circle cx="180" cy="350" r="3.8"/>
+        <circle cx="420" cy="270" r="4"/>
+        <circle cx="560" cy="220" r="3.6"/>
+        <circle cx="640" cy="350" r="4.2"/>
+        <circle cx="740" cy="260" r="3.4"/>
+        <circle cx="320" cy="360" r="3.6"/>
+      </g>
+
+      <!-- muddy ground -->
+      <rect x="0" y="400" width="800" height="70" fill="#4d4234"/>
+      <g stroke="#3a3326" stroke-width="2.4" fill="none" stroke-linecap="round">
+        <path d="M 40 432 q 30 -8 60 0"/>
+        <path d="M 200 442 q 40 -8 80 0"/>
+        <path d="M 360 432 q 40 -10 80 0"/>
+        <path d="M 540 444 q 40 -8 80 0"/>
+        <path d="M 700 434 q 30 -8 60 0"/>
+      </g>
+      <!-- puddles -->
+      <g fill="#5a6680" stroke="#3a4252" stroke-width="1">
+        <ellipse cx="160" cy="448" rx="32" ry="6"/>
+        <ellipse cx="520" cy="452" rx="42" ry="7"/>
+      </g>
+
+      <!-- robot (scale 3, center (400, 340)) holding a wide interval above head -->
+      <g transform="translate(400, 340) scale(3)">
+
+      <!-- antenna -->
+      <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+      <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+      <!-- head -->
+      <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+      <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+      <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+      <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+      <!-- body -->
+      <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+      <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+      <!-- long raised arms reaching above head and outward -->
+      <line x1="-13" y1="3" x2="-40" y2="-52" stroke="#1f3a6e" stroke-width="4" stroke-linecap="round"/>
+      <line x1="13"  y1="3" x2="40"  y2="-52" stroke="#1f3a6e" stroke-width="4" stroke-linecap="round"/>
+      <!-- legs -->
+      <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+      <rect x="3"  y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+      </g>
+
+      <!-- wide interval bar held above the robot's head -->
+
+      <line x1="280" y1="172" x2="280" y2="196" stroke="#b22222" stroke-width="4" stroke-linecap="round"/>
+      <line x1="280" y1="172" x2="290" y2="172" stroke="#b22222" stroke-width="4" stroke-linecap="round"/>
+      <line x1="280" y1="196" x2="290" y2="196" stroke="#b22222" stroke-width="4" stroke-linecap="round"/>
+      <line x1="520" y1="172" x2="520" y2="196" stroke="#b22222" stroke-width="4" stroke-linecap="round"/>
+      <line x1="520" y1="172" x2="510" y2="172" stroke="#b22222" stroke-width="4" stroke-linecap="round"/>
+      <line x1="520" y1="196" x2="510" y2="196" stroke="#b22222" stroke-width="4" stroke-linecap="round"/>
+      <line x1="280" y1="184" x2="520" y2="184" stroke="#b22222" stroke-width="4" stroke-linecap="round"/>
+
+    </svg>
+  </div>
+
+  <div class="footline">out of distribution &mdash; the model widens its bracket</div>
+  <div class="pagenum">32 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- THE APPLICATION: CONTINUOUS-STATE LUNAR LANDER                  -->
+<!-- ============================================================ -->
+<!-- SECTION DIVIDER: V -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div style="display: flex; flex-direction: column; justify-content: center; align-items: center; height: 100%; text-align: center;">
+    <div style="font-size: 22px; font-style: italic; color: var(--soft); letter-spacing: 3px; margin-bottom: 30px;">Section V</div>
+    <div style="height: 2px; width: 140px; background: var(--beamer-blue); opacity: 0.5; margin-bottom: 36px;"></div>
+    <div style="font-size: 50px; font-weight: 700; color: var(--beamer-blue); line-height: 1.2; max-width: 900px;">Application</div>
+  </div>
+  <div class="pagenum">33 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">The application: continuous-state lunar lander</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; justify-content: center; align-items: center; height: 84%; margin-top: 6px;">
+    <svg viewBox="0 0 1020 580" preserveAspectRatio="xMidYMid meet"
+         style="width: 100%; max-width: 1020px; height: auto; max-height: 600px; display: block;">
+      <defs>
+        <linearGradient id="lunarSky" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stop-color="#070b1a"/>
+          <stop offset="100%" stop-color="#1a2138"/>
+        </linearGradient>
+        <radialGradient id="thruster" cx="50%" cy="0%" r="100%">
+          <stop offset="0%" stop-color="#fff5b3"/>
+          <stop offset="60%" stop-color="#e0a040"/>
+          <stop offset="100%" stop-color="#b22222" stop-opacity="0"/>
+        </radialGradient>
+        <marker id="windArr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#e0a040"/>
+        </marker>
+        <marker id="gArr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+          <path d="M0,0 L10,5 L0,10 z" fill="#aac4ec"/>
+        </marker>
+      </defs>
+
+      <!-- starry sky -->
+      <rect x="0" y="0" width="1020" height="440" fill="url(#lunarSky)"/>
+      <g fill="#fdf6e3">
+        <circle cx="60"  cy="60"  r="1.6"/>
+        <circle cx="180" cy="40"  r="1.2"/>
+        <circle cx="320" cy="100" r="1.8"/>
+        <circle cx="500" cy="60"  r="1.4"/>
+        <circle cx="640" cy="120" r="1.6"/>
+        <circle cx="800" cy="50"  r="1.2"/>
+        <circle cx="920" cy="100" r="1.8"/>
+        <circle cx="140" cy="160" r="1.0"/>
+        <circle cx="260" cy="220" r="1.4"/>
+        <circle cx="440" cy="180" r="1.0"/>
+        <circle cx="580" cy="250" r="1.2"/>
+        <circle cx="760" cy="180" r="1.4"/>
+        <circle cx="860" cy="240" r="1.2"/>
+        <circle cx="980" cy="180" r="1.0"/>
+        <circle cx="380" cy="320" r="1.2"/>
+        <circle cx="660" cy="340" r="1.0"/>
+        <circle cx="50"  cy="280" r="1.6"/>
+      </g>
+
+      <!-- moon ground -->
+      <rect x="0" y="440" width="1020" height="140" fill="#5e5754"/>
+      <ellipse cx="120" cy="490" rx="40" ry="8" fill="#4a4441"/>
+      <ellipse cx="320" cy="510" rx="60" ry="10" fill="#4a4441"/>
+      <ellipse cx="720" cy="510" rx="48" ry="9" fill="#4a4441"/>
+      <ellipse cx="900" cy="488" rx="34" ry="7" fill="#4a4441"/>
+
+      <!-- landing pad -->
+      <rect x="430" y="436" width="160" height="10" fill="#2c7a3f" stroke="#1a4a26" stroke-width="1.6"/>
+      <line x1="430" y1="436" x2="430" y2="460" stroke="#2c7a3f" stroke-width="3"/>
+      <line x1="590" y1="436" x2="590" y2="460" stroke="#2c7a3f" stroke-width="3"/>
+      <text x="510" y="476" text-anchor="middle" font-size="14" font-style="italic" fill="#a4c673">landing pad</text>
+
+      <!-- LANDER -->
+      <g transform="translate(510, 230)">
+        <!-- thruster flame -->
+        <ellipse cx="0" cy="46" rx="14" ry="28" fill="url(#thruster)" opacity="0.85"/>
+        <!-- body -->
+        <rect x="-32" y="-28" width="64" height="52" rx="4" fill="#2a4d8f" stroke="#e7eef8" stroke-width="2"/>
+        <!-- viewport -->
+        <circle cx="0" cy="-8" r="9" fill="#aac4ec" stroke="#0c1020" stroke-width="1.4"/>
+        <!-- legs -->
+        <line x1="-32" y1="22" x2="-46" y2="50" stroke="#e7eef8" stroke-width="2.6"/>
+        <line x1="32"  y1="22" x2="46"  y2="50" stroke="#e7eef8" stroke-width="2.6"/>
+        <!-- feet -->
+        <rect x="-52" y="48" width="14" height="5" rx="1.5" fill="#e7eef8"/>
+        <rect x="38"  y="48" width="14" height="5" rx="1.5" fill="#e7eef8"/>
+        <!-- side thrusters -->
+        <rect x="-38" y="-10" width="6" height="14" rx="1" fill="#1c1c1c"/>
+        <rect x="32"  y="-10" width="6" height="14" rx="1" fill="#1c1c1c"/>
+      </g>
+
+      <!-- WIND streaks coming from the left -->
+      <g stroke="#e0a040" stroke-width="3" fill="none" stroke-linecap="round">
+        <path d="M 60 200 Q 140 192, 220 200 Q 260 204, 300 198"
+              marker-end="url(#windArr)"/>
+        <path d="M 50 250 Q 130 244, 210 252 Q 250 256, 320 250"
+              marker-end="url(#windArr)"/>
+        <path d="M 70 300 Q 150 294, 230 300 Q 270 304, 340 298"
+              marker-end="url(#windArr)"/>
+      </g>
+      <text x="100" y="170" font-size="20" font-weight="700" fill="#e0a040">wind</text>
+
+      <!-- GRAVITY arrow on the right -->
+      <g stroke="#aac4ec" stroke-width="3.2" fill="none">
+        <line x1="900" y1="160" x2="900" y2="380" marker-end="url(#gArr)"/>
+      </g>
+      <text x="900" y="140" text-anchor="middle" font-size="20" font-weight="700" fill="#aac4ec">gravity</text>
+
+      <!-- CONDITIONS LEGEND BOX -->
+      <g transform="translate(40, 480)">
+        <rect x="0" y="0" width="940" height="80" rx="8" fill="#0c1020" stroke="#aac4ec" stroke-width="1.6" opacity="0.92"/>
+
+        <!-- column headers -->
+        <text x="170" y="26" text-anchor="middle" font-size="15" font-weight="700" fill="#a4c673" letter-spacing="0.5">TRAINING</text>
+        <text x="660" y="26" text-anchor="middle" font-size="15" font-weight="700" fill="#e26b6b" letter-spacing="0.5">OUT OF DISTRIBUTION</text>
+
+        <line x1="350" y1="14" x2="350" y2="70" stroke="#aac4ec" stroke-width="1" opacity="0.45"/>
+
+        <!-- wind row -->
+        <text x="30"  y="52" font-size="17" fill="#e0a040" font-weight="700">wind</text>
+        <text x="170" y="52" text-anchor="middle" font-size="17" fill="#fdf6e3">$\in [0, 15]$</text>
+        <text x="500" y="52" text-anchor="middle" font-size="17" fill="#fdf6e3">extended to $25$</text>
+
+        <!-- gravity row -->
+        <text x="800" y="52" text-anchor="end" font-size="17" fill="#aac4ec" font-weight="700">gravity</text>
+        <text x="830" y="52" font-size="17" fill="#fdf6e3">$= -10$</text>
+
+        <text x="170" y="72" text-anchor="middle" font-size="14" font-style="italic" fill="#cfd8e3">domain-randomised each episode</text>
+        <text x="500" y="72" text-anchor="middle" font-size="14" font-style="italic" fill="#cfd8e3">$g = -11.99$ &nbsp;&middot;&nbsp; or combined with high wind</text>
+      </g>
+
+    </svg>
+  </div>
+
+  <div class="footline">application &mdash; 8-dim continuous state, four discrete actions; OOD shifts wind and gravity</div>
+  <div class="pagenum">34 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Cautious deployment &nbsp;($c = 0$)</div>
+  <div class="frame-rule"></div>
+
+  <div class="gif-single">
+    <div class="gif-card good">
+      <img src="gifs/03_cautious_at_wind.gif" alt="cautious lands">
+      <div class="gif-cap">reward <strong>+302</strong> in this trial</div>
+    </div>
+  </div>
+
+  <p class="caveat" style="margin-top: 36px;">
+    Acts on the lower bound. Above-median trial for illustration.
+  </p>
+
+  <div class="footline">same model &mdash; cautious knob position</div>
+  <div class="pagenum">35 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 14 — DARING                                                   -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Daring deployment &nbsp;($c = 1$)</div>
+  <div class="frame-rule"></div>
+
+  <div class="gif-single">
+    <div class="gif-card bad">
+      <img src="gifs/04_daring_at_wind.gif" alt="daring crashes">
+      <div class="gif-cap">reward <strong>$-1006$</strong> in this trial</div>
+    </div>
+  </div>
+
+  <p class="caveat" style="margin-top: 36px;">
+    Same network weights as the previous slide. Only $c$ changed.
+  </p>
+
+  <div class="footline">same model &mdash; daring knob position</div>
+  <div class="pagenum">36 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 15 — WIDTH GROWS ON OOD                                       -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Interval width grows under shift</div>
+  <div class="frame-rule"></div>
+
+  <svg id="chart-width" class="chart-svg" viewBox="0 0 1020 520" preserveAspectRatio="xMidYMid meet"
+       style="width: 100%; max-width: 1020px; height: auto; max-height: 540px; display: block; margin: 8px auto 0;"></svg>
+
+  <p class="caveat" style="margin-top: 6px; font-size: 14px;">
+    <em>Left:</em> width climbs with wind power; range-trained training band shaded.
+    <em>Right:</em> up to $+60\%$ wider at the combined OOD condition. Qualitative trend on one environment.
+  </p>
+
+  <div class="footline">5 seeds × 30 episodes per condition</div>
+  <div class="pagenum">37 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 16 — WIND = 0                                                 -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Training dynamics</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; justify-content: center; margin-top: 4px;">
+    <svg id="trainDynSVG" viewBox="0 0 920 500"
+         style="width: 100%; max-width: 920px; height: auto; display: block;"></svg>
+  </div>
+
+  <p class="caveat" style="margin-top: 4px; font-size: 14px; line-height: 1.35;">
+    Bold line = smoothed; faint = raw per-episode. One seed × 800 ep, range-trained on wind $\in [0, 15]$.
+    Reward climbs past the $200$ solve threshold; width rises then settles; coverage and $t$ oscillate around their equilibria.
+  </p>
+
+  <div class="footline">training dynamics &mdash; coverage / $t$ / width / loss in the same control loop</div>
+  <div class="pagenum">38 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 1 — HOOK                                                      -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Wind $= 0$ &nbsp;(in-distribution)</div>
+  <div class="frame-rule"></div>
+
+  <div class="col-headers">
+    <div class="col-header" style="color: #666;">scalar DQN baseline</div>
+    <div class="col-header" style="color: var(--good);">credal interval DQN (adaptive $c$)</div>
+  </div>
+
+  <div class="gif-pair">
+    <div class="gif-card muted">
+      <img src="gifs/PC_std_id.gif" alt="std id">
+      <div class="gif-cap"><span class="label muted">reward $+241$</span></div>
+    </div>
+    <div class="gif-card good">
+      <img src="gifs/PC_credal_id.gif" alt="credal id">
+      <div class="gif-cap"><span class="label good">reward $+271$</span></div>
+    </div>
+  </div>
+
+  <p class="caveat" style="margin-top: 50px;">Single illustrative trials. Both land cleanly.</p>
+
+  <div class="footline">wind progression &mdash; in-distribution</div>
+  <div class="pagenum">39 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 17 — WIND = 15                                                -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Wind $= 15$ &nbsp;(boundary)</div>
+  <div class="frame-rule"></div>
+
+  <div class="col-headers">
+    <div class="col-header" style="color: #666;">scalar DQN baseline</div>
+    <div class="col-header" style="color: var(--good);">credal interval DQN (adaptive $c$)</div>
+  </div>
+
+  <div class="gif-pair">
+    <div class="gif-card muted">
+      <img src="gifs/PC_std_w15.gif" alt="std w15">
+      <div class="gif-cap"><span class="label muted">reward $+225$</span></div>
+    </div>
+    <div class="gif-card good">
+      <img src="gifs/PC_credal_w15.gif" alt="credal w15">
+      <div class="gif-cap"><span class="label good">reward $+260$</span></div>
+    </div>
+  </div>
+
+  <p class="caveat" style="margin-top: 50px;">Out of distribution for the scalar agent; boundary for the credal one.</p>
+
+  <div class="footline">wind progression &mdash; boundary</div>
+  <div class="pagenum">40 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 18 — WIND = 25                                                -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Wind $= 25$ &nbsp;(far OOD)</div>
+  <div class="frame-rule"></div>
+
+  <div class="col-headers">
+    <div class="col-header" style="color: var(--bad);">scalar DQN baseline</div>
+    <div class="col-header" style="color: var(--good);">credal interval DQN (adaptive $c$)</div>
+  </div>
+
+  <div class="gif-pair">
+    <div class="gif-card bad">
+      <img src="gifs/PC_std_w25.gif" alt="std w25">
+      <div class="gif-cap"><span class="label bad">reward $-4$</span></div>
+    </div>
+    <div class="gif-card good">
+      <img src="gifs/PC_credal_w25.gif" alt="credal w25">
+      <div class="gif-cap"><span class="label good">reward $+232$</span></div>
+    </div>
+  </div>
+
+  <p class="caveat" style="margin-top: 50px;">Far outside any training distribution. Single illustrative trials.</p>
+
+  <div class="footline">wind progression &mdash; far OOD</div>
+  <div class="pagenum">41 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 19 — GRAVITY OOD                                              -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Gravity $= -11.99$ &nbsp;(OOD on a different axis)</div>
+  <div class="frame-rule"></div>
+
+  <div class="col-headers">
+    <div class="col-header" style="color: var(--bad);">scalar DQN baseline</div>
+    <div class="col-header" style="color: var(--good);">credal interval DQN (adaptive $c$)</div>
+  </div>
+
+  <div class="gif-pair">
+    <div class="gif-card bad">
+      <img src="gifs/PC_std_g_n11_99.gif" alt="std grav">
+      <div class="gif-cap"><span class="label bad">reward $+29$</span></div>
+    </div>
+    <div class="gif-card good">
+      <img src="gifs/PC_credal_g_n11_99.gif" alt="credal grav">
+      <div class="gif-cap"><span class="label good">reward $+244$</span></div>
+    </div>
+  </div>
+
+  <p class="caveat" style="margin-top: 50px;">
+    Neither agent saw varied gravity during training &mdash; OOD for both.
+  </p>
+
+  <div class="footline">gravity progression &mdash; far OOD on a second axis</div>
+  <div class="pagenum">42 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 39 — COMBO OOD                                                -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Combo OOD &nbsp;(wind $= 25$, gravity $= -11.99$)</div>
+  <div class="frame-rule"></div>
+
+  <div class="col-headers">
+    <div class="col-header" style="color: var(--bad);">scalar DQN baseline</div>
+    <div class="col-header" style="color: var(--good);">credal interval DQN (adaptive $c$)</div>
+  </div>
+
+  <div class="gif-pair">
+    <div class="gif-card bad">
+      <img src="gifs/PC_std_combo.gif" alt="std combo OOD">
+      <div class="gif-cap"><span class="label bad">reward $-57$</span></div>
+    </div>
+    <div class="gif-card good">
+      <img src="gifs/PC_credal_combo.gif" alt="credal combo OOD">
+      <div class="gif-cap"><span class="label good">reward $+216$</span></div>
+    </div>
+  </div>
+
+  <p class="caveat" style="margin-top: 50px;">
+    Both axes shifted at once &mdash; the hardest condition in the eval grid for both controllers.<br>
+    Credal trial chosen to show a successful landing &mdash; this happens in $19$ of $45$ rollouts at this condition.
+  </p>
+
+  <div class="footline">combo OOD &mdash; wind and gravity shifted simultaneously</div>
+  <div class="pagenum">43 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 40 — PERFORMANCE SUMMARY                                      -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Aggregate performance</div>
+  <div class="frame-rule"></div>
+
+  <svg id="chart-perf" class="chart-svg" viewBox="0 0 1020 540" preserveAspectRatio="xMidYMid meet"
+       style="width: 100%; max-width: 1020px; height: auto; max-height: 560px; display: block; margin: 6px auto 0;"></svg>
+
+  <p class="caveat" style="margin-top: 4px; font-size: 13px; line-height: 1.35;">
+    Interval variants above the scalar baseline at every condition; range-trained adaptive-$c$ beats both fixed-$c$ baselines on $7$ of $11$ conditions.
+    5 seeds × 30 episodes per condition; 800 training episodes; no hyperparameter search.
+  </p>
+
+  <div class="footline">aggregate &mdash; medians across 5 seeds</div>
+  <div class="pagenum">44 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- 21 — WHERE THIS SITS                                          -->
+<!-- ============================================================ -->
+<!-- CREDAL DQN GENERALIZED                                          -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Credal DQN Generalized</div>
+  <div class="frame-rule"></div>
+
+  <svg width="0" height="0" style="position: absolute;">
+    <defs>
+      <marker id="bRArrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+        <path d="M0,0 L10,5 L0,10 z" fill="#1c1c1c"/>
+      </marker>
+    </defs>
+  </svg>
+
+  <div style="display: flex; flex-direction: column; gap: 18px; margin-top: 14px; align-items: center;">
+    <div style="display: flex; justify-content: center; gap: 18px; width: 100%;">
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">1</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">see s</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(60, 165) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><rect x="120" y="100" width="68" height="72" rx="6" fill="#fdf6e3" stroke="#b58900" stroke-width="1.6"/><text x="154" y="120" font-size="11" fill="#b58900" text-anchor="middle" font-weight="700">Env</text><text x="154" y="146" font-size="18" font-style="italic" fill="#1c1c1c" text-anchor="middle">s</text><circle cx="135" cy="156" r="2" fill="#b58900"/><circle cx="154" cy="160" r="2" fill="#b58900"/><circle cx="172" cy="156" r="2" fill="#b58900"/><line x1="118" y1="140" x2="82" y2="148" stroke="#1c1c1c" stroke-width="1.4" stroke-dasharray="3 3"/></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Environment hands a state s.</div>
+</div>
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">2</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">score intervals</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(100, 180) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><ellipse cx="42" cy="85" rx="36" ry="24" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.4"/><text x="42" y="78" font-size="11" fill="#1f3a6e" text-anchor="middle" font-weight="700">[3.5, 4.9]</text><line x1="22" y1="92" x2="62" y2="92" stroke="#1f3a6e" stroke-width="2"/><line x1="22" y1="88" x2="22" y2="96" stroke="#1f3a6e" stroke-width="2"/><line x1="62" y1="88" x2="62" y2="96" stroke="#1f3a6e" stroke-width="2"/><ellipse cx="100" cy="58" rx="36" ry="24" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.4"/><text x="100" y="51" font-size="11" fill="#1f3a6e" text-anchor="middle" font-weight="700">[1.2, 2.1]</text><line x1="82" y1="65" x2="118" y2="65" stroke="#1f3a6e" stroke-width="2"/><line x1="82" y1="61" x2="82" y2="69" stroke="#1f3a6e" stroke-width="2"/><line x1="118" y1="61" x2="118" y2="69" stroke="#1f3a6e" stroke-width="2"/><ellipse cx="158" cy="85" rx="38" ry="24" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.4"/><text x="158" y="78" font-size="11" fill="#1f3a6e" text-anchor="middle" font-weight="700">[-0.8, 0.2]</text><line x1="138" y1="92" x2="178" y2="92" stroke="#1f3a6e" stroke-width="2"/><line x1="138" y1="88" x2="138" y2="96" stroke="#1f3a6e" stroke-width="2"/><line x1="178" y1="88" x2="178" y2="96" stroke="#1f3a6e" stroke-width="2"/><text x="183" y="22" font-size="20" fill="#b22222">&#9733;</text><line x1="14" y1="34" x2="186" y2="202" stroke="#b22222" stroke-width="10" stroke-linecap="round" opacity="0.88"/><line x1="14" y1="202" x2="186" y2="34" stroke="#b22222" stroke-width="10" stroke-linecap="round" opacity="0.88"/></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Q-net: an <em>interval</em> per action.</div>
+</div>
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">3</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">Hurwicz pick</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(100, 180) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><ellipse cx="42" cy="85" rx="38" ry="24" fill="#fff5e0" stroke="#b58900" stroke-width="2.4"/><text x="42" y="78" font-size="11" fill="#b58900" text-anchor="middle" font-weight="700">[3.5, 4.9]</text><line x1="22" y1="92" x2="62" y2="92" stroke="#b58900" stroke-width="2"/><line x1="22" y1="88" x2="22" y2="96" stroke="#b58900" stroke-width="2"/><line x1="62" y1="88" x2="62" y2="96" stroke="#b58900" stroke-width="2"/><circle cx="40" cy="92" r="3" fill="#b58900"/><text x="42" y="50" font-size="11" fill="#b58900" text-anchor="middle">&larr; Hurwicz max</text><ellipse cx="158" cy="85" rx="34" ry="22" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.2" opacity="0.55"/><text x="158" y="80" font-size="11" fill="#1f3a6e" text-anchor="middle" opacity="0.55">[-0.8, 0.2]</text><text x="100" y="120" font-size="11" fill="#1c1c1c" text-anchor="middle" font-style="italic">Qℓ + c·(Qᵤ − Qℓ)</text><circle cx="100" cy="138" r="11" fill="#fdf6e3" stroke="#b58900" stroke-width="1.5"/><text x="100" y="142" font-size="11" font-weight="700" fill="#b58900" text-anchor="middle">c</text><text x="183" y="22" font-size="20" fill="#b22222">&#9733;</text><line x1="14" y1="34" x2="186" y2="202" stroke="#b22222" stroke-width="10" stroke-linecap="round" opacity="0.88"/><line x1="14" y1="202" x2="186" y2="34" stroke="#b22222" stroke-width="10" stroke-linecap="round" opacity="0.88"/></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Act a* = argmax<sub>a</sub> [Q<sub>ℓ</sub> + c·(Q<sub>u</sub> &minus; Q<sub>ℓ</sub>)].</div>
+</div>
+    </div>
+    <div style="display: flex; justify-content: center; gap: 18px; width: 100%;">
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">4</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">step</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(50, 165) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><rect x="120" y="100" width="68" height="72" rx="6" fill="#fdf6e3" stroke="#b58900" stroke-width="1.6"/><text x="154" y="120" font-size="11" fill="#b58900" text-anchor="middle" font-weight="700">Env</text><text x="154" y="146" font-size="14" fill="#1c1c1c" text-anchor="middle">r, s′</text><line x1="80" y1="140" x2="118" y2="135" stroke="#1c1c1c" stroke-width="1.5" marker-end="url(#aRArrow)"/><text x="99" y="128" font-size="11" font-style="italic" fill="#1c1c1c" text-anchor="middle">a</text><path d="M 118 155 C 100 175, 90 180, 80 165" fill="none" stroke="#b58900" stroke-width="1.5" marker-end="url(#aRArrow)"/><text x="100" y="190" font-size="11" font-style="italic" fill="#b58900" text-anchor="middle">r, s′</text></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Environment returns r and s′.</div>
+</div>
+    <div style="border: 1.5px solid var(--grid); border-radius: 6px; background: #fcfdff; padding: 6px 6px 6px; box-shadow: var(--frame-shadow); display: flex; flex-direction: column; align-items: center; flex: 0 1 200px; max-width: 220px;">
+  <div style="display: flex; align-items: center; gap: 6px; align-self: flex-start; margin-left: 4px;">
+    <div style="width: 24px; height: 24px; border-radius: 50%; background: var(--beamer-blue); color: white; font-size: 14px; font-weight: 700; display: flex; align-items: center; justify-content: center;">5</div>
+    <div style="font-size: 14px; font-weight: 700; color: var(--beamer-blue);">update + self-tune</div>
+  </div>
+  <svg viewBox="0 25 200 185" width="100%" style="display: block; margin-top: 4px;"><g transform="translate(45, 178) scale(1.0)">
+  <line x1="0" y1="-30" x2="0" y2="-22" stroke="#1f3a6e" stroke-width="1.6"/>
+  <circle cx="0" cy="-32" r="2.5" fill="#1f3a6e"/>
+  <rect x="-14" y="-22" width="28" height="22" rx="4" fill="#aac4ec" stroke="#1f3a6e" stroke-width="1.8"/>
+  <circle cx="-5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <circle cx="5" cy="-13" r="2.2" fill="#1f3a6e"/>
+  <line x1="-4" y1="-6" x2="4" y2="-6" stroke="#1f3a6e" stroke-width="1.4"/>
+  <rect x="-13" y="0" width="26" height="22" rx="3" fill="#1f3a6e" stroke="#1f3a6e" stroke-width="1.5"/>
+  <circle cx="0" cy="11" r="2" fill="#fdf6e3"/>
+  <rect x="-19" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="13" y="3" width="6" height="14" rx="2" fill="#1f3a6e"/>
+  <rect x="-9" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+  <rect x="3" y="22" width="6" height="10" rx="1.5" fill="#1f3a6e"/>
+</g><rect x="86" y="56" width="106" height="116" rx="6" fill="#f5f8fc" stroke="#1f3a6e" stroke-width="1.4"/><text x="139" y="74" font-size="11" fill="#1f3a6e" text-anchor="middle" font-weight="700">target [Tℓ, Tᵤ]</text><line x1="106" y1="86" x2="172" y2="86" stroke="#1f3a6e" stroke-width="2.2"/><line x1="106" y1="81" x2="106" y2="91" stroke="#1f3a6e" stroke-width="2.2"/><line x1="172" y1="81" x2="172" y2="91" stroke="#1f3a6e" stroke-width="2.2"/><text x="139" y="108" font-size="10" fill="#b22222" text-anchor="middle" font-style="italic">interval loss L(·; t)</text><rect x="100" y="120" width="80" height="14" rx="3" fill="#fdf6e3" stroke="#b58900" stroke-width="1.3"/><rect x="100" y="120" width="68" height="14" rx="3" fill="#b58900" opacity="0.55"/><text x="140" y="131" font-size="9" fill="#1c1c1c" text-anchor="middle" font-weight="700">coverage 0.85</text><circle cx="139" cy="153" r="11" fill="#fdf6e3" stroke="#b58900" stroke-width="1.5"/><text x="139" y="157" font-size="11" font-weight="700" fill="#b58900" text-anchor="middle">t</text><text x="120" y="156" font-size="10" fill="#b58900">&loz;</text><text x="183" y="22" font-size="20" fill="#b22222">&#9733;</text><line x1="14" y1="34" x2="186" y2="202" stroke="#b22222" stroke-width="10" stroke-linecap="round" opacity="0.88"/><line x1="14" y1="202" x2="186" y2="34" stroke="#b22222" stroke-width="10" stroke-linecap="round" opacity="0.88"/></svg>
+  <div style="font-size: 13px; color: var(--text); text-align: center; margin-top: 4px; min-height: 30px; line-height: 1.25;">Interval loss. Coverage tracker adjusts t.</div>
+</div>
+  </div>
+
+  </div>
+
+  <div class="footline">credal interval DQN training loop &mdash; <span style="color: #b22222;">&#9733;</span> marks what's new vs. standard DQN</div>
+  <div class="pagenum">45 / 46</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- TAKE HOME LESSONS                                                -->
+<!-- ============================================================ -->
+<div class="slide">
+  <div class="frametitle">Take home lessons</div>
+  <div class="frame-rule"></div>
+
+  <div style="display: flex; flex-direction: column; justify-content: center; height: 84%; max-width: 940px; margin: 0 auto;">
+    <ol style="font-size: 20px; line-height: 1.55; color: var(--text); padding-left: 32px; margin: 0;">
+      <li style="margin-bottom: 16px;">Well-behaved error loss functions make only coherent imprecise $\mathcal{D}$ admissible.</li>
+      <li style="margin-bottom: 16px;">A wide class of well-behaved error loss functions exist.</li>
+      <li style="margin-bottom: 16px;">Imprecise probability and IP loss functions can help solve the strategy selection problem.</li>
+      <li style="margin-bottom: 16px;">We can dynamically adapt IP loss functions to incentivise learning an appropriate amount of imprecision for a given environment / task.</li>
+      <li style="margin-bottom: 0;">Imprecision can serve as an internal signal of OOD conditions.</li>
+    </ol>
+  </div>
+
+  <div class="footline">take home lessons</div>
+  <div class="pagenum">46 / 46</div>
+</div>
+
+<div class="navhint">← / → to navigate · space advances</div>
+
+<script>
+// ===================================================================
+// Slide navigation
+// ===================================================================
+const slides = [...document.querySelectorAll('.slide')];
+let cur = 0;
+function show(i) { slides.forEach((s, idx) => s.classList.toggle('active', idx === i)); }
+document.addEventListener('keydown', e => {
+  if (['ArrowRight', ' ', 'PageDown'].includes(e.key)) {
+    cur = Math.min(slides.length - 1, cur + 1); show(cur); e.preventDefault();
+  } else if (['ArrowLeft', 'PageUp'].includes(e.key)) {
+    cur = Math.max(0, cur - 1); show(cur); e.preventDefault();
+  }
+});
+
+// ===================================================================
+// Width-vs-OOD chart (slide 15)
+// ===================================================================
+function drawWidthChart() {
+  const svg = document.getElementById('chart-width');
+  if (!svg) return;
+  // Two side-by-side panels:
+  //   LEFT  — wind sweep (true real-valued x-axis: wind power 0..25)
+  //   RIGHT — discrete OOD conditions (gravity shifts + combo) as grouped bars
+  // Both panels share the y-axis (interval width, 3.5..7.0) so comparison is direct.
+  const W = 1020, H = 520, mt = 26, mb = 64;
+  const plotH = H - mt - mb;
+  const ml = 78, mr = 36, GAP_PANELS = 60;
+  const leftW = 540;
+  const rightW = W - ml - leftW - GAP_PANELS - mr;
+  const leftX = ml;
+  const rightX = ml + leftW + GAP_PANELS;
+
+  // Source: ood_eval JSONs for calm-trained and range-trained interval-DQN at c=0.0
+  const windData = [
+    { x: 0,  calm: 4.04, cred: 4.16 },
+    { x: 5,  calm: 4.06, cred: 4.36 },
+    { x: 10, calm: 4.14, cred: 4.47 },
+    { x: 15, calm: 4.69, cred: 4.58 },
+    { x: 20, calm: 5.44, cred: 5.14 },
+    { x: 25, calm: 5.44, cred: 5.86 },
+  ];
+  const discrete = [
+    { lab: 'low grav',  sub: '(−3)',     calm: 3.97, cred: 4.04 },
+    { lab: 'high grav', sub: '(−11.9)',  calm: 4.60, cred: 4.66 },
+    { lab: 'combo',     sub: '(w25+g11.99)', calm: 5.62, cred: 6.49 },
+  ];
+
+  const yMin = 3.5, yMax = 7.0;
+  const yAt = v => mt + plotH * (1 - (v - yMin) / (yMax - yMin));
+  const yTicks = [3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 7.0];
+
+  let s = '';
+
+  // ===== LEFT PANEL: wind sweep =====
+  s += `<rect x="${leftX}" y="${mt}" width="${leftW}" height="${plotH}" fill="#fafafa" stroke="#cccccc" stroke-width="0.6"/>`;
+  // Shaded band: credal training range (wind ∈ [0, 15])
+  const xWind = w => leftX + leftW * w / 25;
+  const tLo = xWind(0), tHi = xWind(15);
+  s += `<rect x="${tLo}" y="${mt}" width="${tHi - tLo}" height="${plotH}" fill="#fdf6e3" opacity="0.55"/>`;
+  s += `<text x="${(tLo + tHi)/2}" y="${mt + 14}" font-size="12" text-anchor="middle" fill="#b58900" font-style="italic">range-trained: in-distribution</text>`;
+  // Y-axis ticks + gridlines (full labels on left panel)
+  yTicks.forEach(v => {
+    const y = yAt(v);
+    s += `<line class="gridline" x1="${leftX}" y1="${y}" x2="${leftX + leftW}" y2="${y}"/>`;
+    s += `<text class="axis-tick" x="${leftX - 8}" y="${y + 5}" text-anchor="end" font-size="14">${v.toFixed(1)}</text>`;
+  });
+  s += `<text class="axis-label" x="${leftX - 56}" y="${mt + plotH/2}" transform="rotate(-90 ${leftX - 56},${mt + plotH/2})" text-anchor="middle" font-weight="600" font-size="16">interval width</text>`;
+  // X-axis ticks at real wind values
+  [0, 5, 10, 15, 20, 25].forEach(w => {
+    const x = xWind(w);
+    s += `<line class="axis" x1="${x}" y1="${mt + plotH}" x2="${x}" y2="${mt + plotH + 5}" stroke="#5a5a5a"/>`;
+    s += `<text class="axis-tick" x="${x}" y="${mt + plotH + 22}" text-anchor="middle" font-size="14">${w}</text>`;
+  });
+  s += `<text class="axis-label" x="${leftX + leftW/2}" y="${mt + plotH + 48}" text-anchor="middle" font-weight="600" font-size="16">wind power</text>`;
+  // Panel title
+  s += `<text x="${leftX + leftW/2}" y="${mt - 10}" font-size="16" text-anchor="middle" font-weight="700" fill="#1c1c1c">wind sweep</text>`;
+  // Lines + dots
+  const pathCalm = windData.map(d => `${xWind(d.x)},${yAt(d.calm)}`).join(' ');
+  const pathCred = windData.map(d => `${xWind(d.x)},${yAt(d.cred)}`).join(' ');
+  s += `<polyline points="${pathCalm}" stroke="var(--bar-orig)" stroke-width="3.2" fill="none"/>`;
+  s += `<polyline points="${pathCred}" stroke="var(--bar-low)" stroke-width="3.2" fill="none"/>`;
+  windData.forEach(d => {
+    s += `<circle cx="${xWind(d.x)}" cy="${yAt(d.calm)}" r="5" fill="var(--bar-orig)"/>`;
+    s += `<circle cx="${xWind(d.x)}" cy="${yAt(d.cred)}" r="5" fill="var(--bar-low)"/>`;
+  });
+
+  // ===== RIGHT PANEL: discrete OOD bars =====
+  s += `<rect x="${rightX}" y="${mt}" width="${rightW}" height="${plotH}" fill="#fafafa" stroke="#cccccc" stroke-width="0.6"/>`;
+  yTicks.forEach(v => {
+    const y = yAt(v);
+    s += `<line class="gridline" x1="${rightX}" y1="${y}" x2="${rightX + rightW}" y2="${y}"/>`;
+  });
+  // Grouped bars (calm vs credal)
+  const groupW = rightW / discrete.length;
+  const barW = Math.min(40, groupW * 0.34);
+  discrete.forEach((d, i) => {
+    const cx = rightX + (i + 0.5) * groupW;
+    const xC = cx - barW - 3, xR = cx + 3;
+    const yC = yAt(d.calm),    yR = yAt(d.cred);
+    const y0 = yAt(yMin);
+    s += `<rect x="${xC}" y="${yC}" width="${barW}" height="${y0 - yC}" fill="var(--bar-orig)"/>`;
+    s += `<rect x="${xR}" y="${yR}" width="${barW}" height="${y0 - yR}" fill="var(--bar-low)"/>`;
+    s += `<text x="${xC + barW/2}" y="${yC - 6}" font-size="12" text-anchor="middle" fill="var(--bar-orig)">${d.calm.toFixed(1)}</text>`;
+    s += `<text x="${xR + barW/2}" y="${yR - 6}" font-size="12" text-anchor="middle" fill="var(--bar-low)">${d.cred.toFixed(1)}</text>`;
+    s += `<text class="axis-tick" x="${cx}" y="${mt + plotH + 22}" text-anchor="middle" font-size="13">${d.lab}</text>`;
+    s += `<text x="${cx}" y="${mt + plotH + 38}" font-size="11" text-anchor="middle" fill="#888" font-style="italic">${d.sub}</text>`;
+  });
+  s += `<text x="${rightX + rightW/2}" y="${mt - 10}" font-size="16" text-anchor="middle" font-weight="700" fill="#1c1c1c">other OOD conditions</text>`;
+
+  // Shared legend (bottom)
+  const lx = ml;
+  s += `<g transform="translate(${lx}, ${H - 16})">`;
+  s += `<line x1="0" y1="-4" x2="18" y2="-4" stroke="var(--bar-orig)" stroke-width="3"/><circle cx="9" cy="-4" r="4" fill="var(--bar-orig)"/><text x="28" y="0" class="legend" font-size="14">calm-trained interval-DQN</text>`;
+  s += `<line x1="280" y1="-4" x2="298" y2="-4" stroke="var(--bar-low)" stroke-width="3"/><circle cx="289" cy="-4" r="4" fill="var(--bar-low)"/><text x="308" y="0" class="legend" font-size="14">range-trained interval-DQN (wind ∈ [0, 15])</text>`;
+  s += `</g>`;
+
+  svg.innerHTML = s;
+  if (window.MathJax && window.MathJax.typesetPromise) window.MathJax.typesetPromise([svg]);
+}
+
+// ===================================================================
+// Performance chart (slide 20)
+// ===================================================================
+function drawPerfChart() {
+  const svg = document.getElementById('chart-perf');
+  if (!svg) return;
+  const W = 1020, H = 540, ml = 92, mr = 32, mt = 22, mb = 80;
+  const plotW = W - ml - mr, plotH = H - mt - mb;
+
+  // scalar_dqn = vanilla scalar DQN, 5-seed median (checkpoints/standard_per_seed/standard_ood_eval.json)
+  // calm_best = calm-trained interval-DQN best fixed-c, 5-seed median
+  // credal_best = range-trained interval-DQN best fixed-c, 5-seed median
+  // adaptive_credal = range-trained adaptive-c, 5-seed median
+  const conds = [
+    { lab: 'ID',         scalar_dqn:  11, calm_best: 259, credal_best: 262, adaptive_credal: 258 },
+    { lab: 'wind 10',    scalar_dqn:  48, calm_best: 234, credal_best: 239, adaptive_credal: 249 },
+    { lab: 'wind 20',    scalar_dqn: -21, calm_best: 141, credal_best: 179, adaptive_credal: 198 },
+    { lab: 'wind 25',    scalar_dqn: -84, calm_best:  90, credal_best: 160, adaptive_credal: 130 },
+    { lab: 'grav -11.99',scalar_dqn:  20, calm_best: 197, credal_best: 206, adaptive_credal: 228 },
+    { lab: 'combo OOD',  scalar_dqn: -58, calm_best:  44, credal_best:  65, adaptive_credal:  41 },
+  ];
+
+  const allVals = conds.flatMap(c => [c.scalar_dqn, c.calm_best, c.credal_best, c.adaptive_credal]);
+  const yMin = Math.min(0, Math.min(...allVals)) - 10;
+  const yMax = Math.max(...allVals) + 10;
+  const y = v => mt + plotH * (1 - (v - yMin) / (yMax - yMin));
+
+  const groupW = plotW / conds.length;
+  const barW = groupW * 0.18;
+
+  let s = '';
+  for (let k = 0; k <= 6; k++) {
+    const v = yMin + (yMax - yMin) * k / 6;
+    const yy = y(v);
+    s += `<line class="gridline" x1="${ml}" y1="${yy}" x2="${ml + plotW}" y2="${yy}"/>`;
+    s += `<text class="axis-tick" x="${ml - 10}" y="${yy + 5}" text-anchor="end" font-size="14">${v.toFixed(0)}</text>`;
+  }
+  s += `<line class="axis" x1="${ml}" y1="${mt}" x2="${ml}" y2="${mt + plotH}"/>`;
+  s += `<line class="axis" x1="${ml}" y1="${mt + plotH}" x2="${ml + plotW}" y2="${mt + plotH}"/>`;
+  s += `<text class="axis-label" x="${ml - 66}" y="${mt + plotH/2}" transform="rotate(-90 ${ml - 66},${mt + plotH/2})" text-anchor="middle" font-size="16" font-weight="600">reward (5-seed median)</text>`;
+
+  conds.forEach((c, i) => {
+    const cx = ml + (i + 0.5) * groupW;
+    const xScalar = cx - 2 * barW - 4;
+    const xCalm = cx - barW - 1;
+    const xCred = cx + 1;
+    const xAdpt = cx + barW + 4;
+    const y0 = y(0);
+    [
+      { x: xScalar, val: c.scalar_dqn,      color: '#bbb' },
+      { x: xCalm,   val: c.calm_best,       color: 'var(--bar-orig)' },
+      { x: xCred,   val: c.credal_best,     color: 'var(--bar-low)' },
+      { x: xAdpt,   val: c.adaptive_credal, color: 'var(--good)' },
+    ].forEach(b => {
+      const yv = y(b.val);
+      s += `<rect x="${b.x}" y="${Math.min(yv, y0)}" width="${barW}" height="${Math.abs(yv - y0)}" fill="${b.color}"/>`;
+      const tyOffset = b.val < 0 ? 14 : -5;
+      s += `<text x="${b.x + barW/2}" y="${yv + tyOffset}" text-anchor="middle" font-size="12" fill="#1c1c1c">${b.val.toFixed(0)}</text>`;
+    });
+    s += `<text class="axis-tick" x="${cx}" y="${mt + plotH + 26}" text-anchor="middle" font-size="15">${c.lab}</text>`;
+  });
+
+  const leg = mt + plotH + 56;
+  s += `<g transform="translate(${ml - 30}, ${leg})">`;
+  s += `<rect x="0" y="0" width="14" height="12" fill="#bbb"/><text x="20" y="10" class="legend" font-size="13">scalar DQN</text>`;
+  s += `<rect x="110" y="0" width="14" height="12" fill="var(--bar-orig)"/><text x="130" y="10" class="legend" font-size="13">calm-trained, best fixed $c$</text>`;
+  s += `<rect x="380" y="0" width="14" height="12" fill="var(--bar-low)"/><text x="400" y="10" class="legend" font-size="13">range-trained, best fixed $c$</text>`;
+  s += `<rect x="650" y="0" width="14" height="12" fill="var(--good)"/><text x="670" y="10" class="legend" font-size="13">range-trained, adaptive $c$</text>`;
+  s += `</g>`;
+
+  svg.innerHTML = s;
+  if (window.MathJax && window.MathJax.typesetPromise) window.MathJax.typesetPromise([svg]);
+}
+
+drawWidthChart();
+drawPerfChart();
+
+// ===================================================================
+// Training-dynamics dashboard (slide 25) — animated SVG
+// ===================================================================
+// Source: talk/training_dashboard_log.json (1 seed × 800 ep, logged every 5 ep)
+const TRAIN_DATA = [{"ep":5,"reward":-102.7,"miss":57.05,"widt":5.57,"width":2.706,"cov":0.8975,"t":0.922},{"ep":10,"reward":-47.9,"miss":60.24,"widt":11.06,"width":2.971,"cov":0.8915,"t":0.9355},{"ep":15,"reward":-291.3,"miss":33.46,"widt":16.68,"width":3.87,"cov":0.8785,"t":0.921},{"ep":20,"reward":-194.4,"miss":34.84,"widt":17.11,"width":4.818,"cov":0.869,"t":0.935},{"ep":25,"reward":-92.1,"miss":20.06,"widt":14.99,"width":5.301,"cov":0.8255,"t":0.938},{"ep":30,"reward":0.3,"miss":20.15,"widt":13.8,"width":6.738,"cov":0.85,"t":0.9495},{"ep":35,"reward":-12.9,"miss":63.2,"widt":16.45,"width":5.434,"cov":0.8635,"t":0.9185},{"ep":40,"reward":-132.4,"miss":133.95,"widt":32.07,"width":4.593,"cov":0.8695,"t":0.931},{"ep":45,"reward":-126.4,"miss":24.5,"widt":11.28,"width":3.767,"cov":0.826,"t":0.9335},{"ep":50,"reward":-250.5,"miss":14.62,"widt":6.48,"width":3.181,"cov":0.817,"t":0.9315},{"ep":55,"reward":-428.6,"miss":8.12,"widt":4.66,"width":4.631,"cov":0.869,"t":0.943},{"ep":60,"reward":-61.4,"miss":10.77,"widt":3.99,"width":3.459,"cov":0.8035,"t":0.9275},{"ep":65,"reward":30.4,"miss":10.02,"widt":3.67,"width":3.589,"cov":0.8225,"t":0.9275},{"ep":70,"reward":55.9,"miss":6.82,"widt":2.91,"width":3.507,"cov":0.888,"t":0.94},{"ep":75,"reward":-65.3,"miss":6.7,"widt":2.57,"width":2.914,"cov":0.8545,"t":0.92},{"ep":80,"reward":185.0,"miss":10.3,"widt":2.95,"width":3.005,"cov":0.8375,"t":0.9215},{"ep":85,"reward":224.3,"miss":6.49,"widt":2.65,"width":2.927,"cov":0.8515,"t":0.9285},{"ep":90,"reward":-41.8,"miss":12.71,"widt":3.47,"width":3.685,"cov":0.8,"t":0.933},{"ep":95,"reward":94.8,"miss":10.99,"widt":2.48,"width":3.372,"cov":0.8615,"t":0.9315},{"ep":100,"reward":217.5,"miss":8.53,"widt":2.36,"width":3.638,"cov":0.855,"t":0.946},{"ep":105,"reward":62.0,"miss":8.58,"widt":2.36,"width":3.216,"cov":0.8845,"t":0.914},{"ep":110,"reward":16.9,"miss":12.8,"widt":2.28,"width":2.642,"cov":0.8245,"t":0.935},{"ep":115,"reward":2.3,"miss":8.91,"widt":2.11,"width":3.277,"cov":0.8805,"t":0.946},{"ep":120,"reward":238.4,"miss":10.47,"widt":2.8,"width":3.042,"cov":0.8005,"t":0.936},{"ep":125,"reward":127.8,"miss":11.47,"widt":2.88,"width":3.104,"cov":0.832,"t":0.9465},{"ep":130,"reward":-37.5,"miss":12.86,"widt":2.57,"width":3.805,"cov":0.875,"t":0.9405},{"ep":135,"reward":244.6,"miss":8.23,"widt":2.29,"width":3.429,"cov":0.8835,"t":0.945},{"ep":140,"reward":129.2,"miss":13.93,"widt":2.77,"width":2.968,"cov":0.86,"t":0.929},{"ep":145,"reward":143.2,"miss":12.06,"widt":2.5,"width":2.86,"cov":0.8185,"t":0.928},{"ep":150,"reward":168.8,"miss":12.71,"widt":2.84,"width":3.136,"cov":0.862,"t":0.916},{"ep":155,"reward":236.8,"miss":7.68,"widt":1.94,"width":3.357,"cov":0.897,"t":0.9425},{"ep":160,"reward":94.1,"miss":10.15,"widt":2.31,"width":4.117,"cov":0.85,"t":0.9495},{"ep":165,"reward":132.1,"miss":12.47,"widt":2.7,"width":3.04,"cov":0.8635,"t":0.9315},{"ep":170,"reward":141.6,"miss":10.1,"widt":2.19,"width":3.118,"cov":0.8025,"t":0.9475},{"ep":175,"reward":292.2,"miss":14.68,"widt":2.71,"width":2.579,"cov":0.865,"t":0.92},{"ep":180,"reward":132.7,"miss":11.08,"widt":2.06,"width":3.326,"cov":0.8905,"t":0.9445},{"ep":185,"reward":144.8,"miss":10.42,"widt":2.02,"width":2.977,"cov":0.871,"t":0.9295},{"ep":190,"reward":140.2,"miss":10.43,"widt":1.77,"width":2.84,"cov":0.83,"t":0.915},{"ep":195,"reward":61.1,"miss":6.03,"widt":1.22,"width":2.804,"cov":0.862,"t":0.925},{"ep":200,"reward":137.3,"miss":8.27,"widt":1.35,"width":2.751,"cov":0.8775,"t":0.926},{"ep":205,"reward":115.9,"miss":11.21,"widt":1.59,"width":2.751,"cov":0.8765,"t":0.944},{"ep":210,"reward":155.6,"miss":8.93,"widt":1.37,"width":2.355,"cov":0.836,"t":0.926},{"ep":215,"reward":260.5,"miss":9.0,"widt":1.33,"width":2.628,"cov":0.9105,"t":0.9265},{"ep":220,"reward":307.8,"miss":8.24,"widt":1.22,"width":2.777,"cov":0.8705,"t":0.922},{"ep":225,"reward":256.6,"miss":8.99,"widt":1.4,"width":2.573,"cov":0.8455,"t":0.935},{"ep":230,"reward":299.4,"miss":12.03,"widt":1.49,"width":2.362,"cov":0.9115,"t":0.9235},{"ep":235,"reward":-9.2,"miss":8.64,"widt":1.27,"width":2.132,"cov":0.8545,"t":0.9265},{"ep":240,"reward":296.4,"miss":11.72,"widt":1.78,"width":2.4,"cov":0.8955,"t":0.939},{"ep":245,"reward":288.5,"miss":11.65,"widt":1.92,"width":2.152,"cov":0.8675,"t":0.9015},{"ep":250,"reward":35.3,"miss":20.33,"widt":2.83,"width":2.709,"cov":0.8585,"t":0.942},{"ep":255,"reward":253.9,"miss":11.32,"widt":1.71,"width":2.341,"cov":0.8155,"t":0.9365},{"ep":260,"reward":223.2,"miss":9.31,"widt":1.92,"width":2.333,"cov":0.817,"t":0.9225},{"ep":265,"reward":299.0,"miss":16.74,"widt":2.9,"width":2.249,"cov":0.8135,"t":0.9295},{"ep":270,"reward":292.3,"miss":17.17,"widt":3.58,"width":2.706,"cov":0.8075,"t":0.94},{"ep":275,"reward":287.8,"miss":18.45,"widt":2.4,"width":2.476,"cov":0.887,"t":0.9135},{"ep":280,"reward":282.7,"miss":10.55,"widt":2.24,"width":2.495,"cov":0.811,"t":0.9295},{"ep":285,"reward":295.4,"miss":17.26,"widt":2.95,"width":2.678,"cov":0.7915,"t":0.9245},{"ep":290,"reward":259.9,"miss":8.79,"widt":1.72,"width":2.469,"cov":0.878,"t":0.93},{"ep":295,"reward":71.1,"miss":15.53,"widt":2.06,"width":2.554,"cov":0.9265,"t":0.9335},{"ep":300,"reward":-150.1,"miss":15.23,"widt":2.53,"width":2.736,"cov":0.8135,"t":0.944},{"ep":305,"reward":285.9,"miss":15.86,"widt":2.65,"width":2.294,"cov":0.8595,"t":0.9145},{"ep":310,"reward":276.0,"miss":12.35,"widt":2.95,"width":2.413,"cov":0.8705,"t":0.9155},{"ep":315,"reward":276.3,"miss":12.22,"widt":2.83,"width":2.487,"cov":0.87,"t":0.901},{"ep":320,"reward":306.7,"miss":12.24,"widt":2.93,"width":2.475,"cov":0.89,"t":0.9075},{"ep":325,"reward":260.9,"miss":11.8,"widt":2.44,"width":2.758,"cov":0.8945,"t":0.925},{"ep":330,"reward":203.1,"miss":17.75,"widt":3.16,"width":2.399,"cov":0.891,"t":0.9085},{"ep":335,"reward":265.3,"miss":13.03,"widt":3.38,"width":2.628,"cov":0.8275,"t":0.931},{"ep":340,"reward":229.1,"miss":26.96,"widt":5.01,"width":2.621,"cov":0.8695,"t":0.9075},{"ep":345,"reward":259.3,"miss":15.08,"widt":4.16,"width":2.818,"cov":0.8535,"t":0.9165},{"ep":350,"reward":288.8,"miss":13.17,"widt":3.81,"width":2.658,"cov":0.8825,"t":0.9205},{"ep":355,"reward":265.2,"miss":15.38,"widt":3.56,"width":3.045,"cov":0.902,"t":0.938},{"ep":360,"reward":294.3,"miss":25.42,"widt":4.59,"width":2.993,"cov":0.8905,"t":0.9255},{"ep":365,"reward":260.5,"miss":24.61,"widt":5.68,"width":2.655,"cov":0.872,"t":0.908},{"ep":370,"reward":228.9,"miss":25.6,"widt":5.46,"width":2.625,"cov":0.8675,"t":0.918},{"ep":375,"reward":265.6,"miss":17.38,"widt":4.6,"width":2.706,"cov":0.8565,"t":0.8945},{"ep":380,"reward":271.4,"miss":25.54,"widt":4.85,"width":2.417,"cov":0.856,"t":0.917},{"ep":385,"reward":251.0,"miss":34.38,"widt":6.94,"width":2.904,"cov":0.873,"t":0.9215},{"ep":390,"reward":249.4,"miss":14.63,"widt":4.47,"width":2.211,"cov":0.8185,"t":0.9085},{"ep":395,"reward":266.1,"miss":28.1,"widt":5.64,"width":2.657,"cov":0.852,"t":0.908},{"ep":400,"reward":223.4,"miss":21.69,"widt":4.58,"width":2.964,"cov":0.841,"t":0.9205},{"ep":405,"reward":-8.5,"miss":27.34,"widt":5.81,"width":3.193,"cov":0.8245,"t":0.938},{"ep":410,"reward":252.2,"miss":18.17,"widt":5.03,"width":2.835,"cov":0.8085,"t":0.9245},{"ep":415,"reward":287.7,"miss":21.05,"widt":5.36,"width":3.143,"cov":0.8615,"t":0.925},{"ep":420,"reward":247.2,"miss":11.34,"widt":4.3,"width":3.262,"cov":0.886,"t":0.9095},{"ep":425,"reward":235.0,"miss":34.12,"widt":7.19,"width":2.797,"cov":0.852,"t":0.9025},{"ep":430,"reward":246.1,"miss":43.2,"widt":7.36,"width":3.203,"cov":0.8755,"t":0.937},{"ep":435,"reward":259.1,"miss":33.03,"widt":6.88,"width":3.251,"cov":0.8725,"t":0.9225},{"ep":440,"reward":3.7,"miss":13.28,"widt":3.95,"width":2.969,"cov":0.828,"t":0.9305},{"ep":445,"reward":275.4,"miss":31.61,"widt":7.08,"width":2.636,"cov":0.855,"t":0.929},{"ep":450,"reward":-6.7,"miss":8.94,"widt":4.39,"width":2.668,"cov":0.885,"t":0.9075},{"ep":455,"reward":264.1,"miss":50.46,"widt":8.1,"width":2.496,"cov":0.8955,"t":0.901},{"ep":460,"reward":308.0,"miss":64.55,"widt":11.7,"width":2.513,"cov":0.784,"t":0.925},{"ep":465,"reward":306.2,"miss":14.23,"widt":5.19,"width":2.767,"cov":0.8855,"t":0.909},{"ep":470,"reward":274.0,"miss":22.06,"widt":5.42,"width":2.594,"cov":0.868,"t":0.912},{"ep":475,"reward":270.9,"miss":20.11,"widt":4.86,"width":3.283,"cov":0.877,"t":0.924},{"ep":480,"reward":282.8,"miss":14.67,"widt":4.53,"width":2.616,"cov":0.783,"t":0.9035},{"ep":485,"reward":269.6,"miss":25.4,"widt":5.43,"width":3.237,"cov":0.91,"t":0.9375},{"ep":490,"reward":271.0,"miss":20.59,"widt":5.18,"width":2.64,"cov":0.8655,"t":0.909},{"ep":495,"reward":272.2,"miss":15.03,"widt":4.57,"width":2.997,"cov":0.844,"t":0.9085},{"ep":500,"reward":293.8,"miss":76.25,"widt":10.76,"width":3.158,"cov":0.867,"t":0.9305},{"ep":505,"reward":272.1,"miss":68.44,"widt":12.57,"width":2.631,"cov":0.829,"t":0.9235},{"ep":510,"reward":280.9,"miss":25.14,"widt":6.38,"width":3.102,"cov":0.8295,"t":0.932},{"ep":515,"reward":230.7,"miss":18.17,"widt":4.91,"width":3.35,"cov":0.8985,"t":0.9275},{"ep":520,"reward":256.5,"miss":99.74,"widt":13.09,"width":3.951,"cov":0.8565,"t":0.9485},{"ep":525,"reward":293.2,"miss":22.31,"widt":5.5,"width":3.426,"cov":0.8485,"t":0.941},{"ep":530,"reward":291.8,"miss":26.42,"widt":5.9,"width":3.111,"cov":0.869,"t":0.92},{"ep":535,"reward":271.7,"miss":13.45,"widt":4.72,"width":2.887,"cov":0.8185,"t":0.929},{"ep":540,"reward":322.7,"miss":59.06,"widt":12.36,"width":3.17,"cov":0.8335,"t":0.937},{"ep":545,"reward":279.8,"miss":39.94,"widt":7.34,"width":2.567,"cov":0.8565,"t":0.9195},{"ep":550,"reward":274.6,"miss":66.65,"widt":11.42,"width":2.92,"cov":0.8865,"t":0.9255},{"ep":555,"reward":282.2,"miss":17.85,"widt":4.84,"width":2.813,"cov":0.8765,"t":0.9025},{"ep":560,"reward":281.3,"miss":13.2,"widt":5.21,"width":3.14,"cov":0.8675,"t":0.9265},{"ep":565,"reward":248.9,"miss":48.9,"widt":10.09,"width":3.202,"cov":0.731,"t":0.913},{"ep":570,"reward":278.6,"miss":19.84,"widt":4.95,"width":2.832,"cov":0.8365,"t":0.929},{"ep":575,"reward":284.1,"miss":58.47,"widt":9.72,"width":3.136,"cov":0.8085,"t":0.9205},{"ep":580,"reward":260.6,"miss":15.79,"widt":5.99,"width":3.182,"cov":0.8735,"t":0.931},{"ep":585,"reward":250.1,"miss":135.11,"widt":15.78,"width":3.131,"cov":0.888,"t":0.927},{"ep":590,"reward":268.4,"miss":25.78,"widt":6.24,"width":3.583,"cov":0.863,"t":0.9205},{"ep":595,"reward":277.9,"miss":396.78,"widt":49.36,"width":3.135,"cov":0.8315,"t":0.923},{"ep":600,"reward":283.5,"miss":25.41,"widt":5.96,"width":2.922,"cov":0.8275,"t":0.897},{"ep":605,"reward":290.7,"miss":44.7,"widt":8.52,"width":3.454,"cov":0.8525,"t":0.9385},{"ep":610,"reward":256.2,"miss":144.67,"widt":20.29,"width":3.813,"cov":0.789,"t":0.9455},{"ep":615,"reward":235.2,"miss":108.16,"widt":14.57,"width":3.787,"cov":0.8265,"t":0.9405},{"ep":620,"reward":271.0,"miss":134.32,"widt":16.14,"width":3.481,"cov":0.875,"t":0.9095},{"ep":625,"reward":-8.5,"miss":237.11,"widt":29.89,"width":3.206,"cov":0.841,"t":0.9135},{"ep":630,"reward":260.1,"miss":33.14,"widt":7.45,"width":3.82,"cov":0.925,"t":0.94},{"ep":635,"reward":294.5,"miss":63.19,"widt":9.57,"width":3.268,"cov":0.8515,"t":0.9325},{"ep":640,"reward":255.0,"miss":78.71,"widt":10.22,"width":3.834,"cov":0.889,"t":0.937},{"ep":645,"reward":283.1,"miss":255.94,"widt":27.32,"width":3.117,"cov":0.8225,"t":0.9345},{"ep":650,"reward":279.1,"miss":20.9,"widt":5.13,"width":3.46,"cov":0.905,"t":0.9225},{"ep":655,"reward":271.2,"miss":201.77,"widt":29.44,"width":2.96,"cov":0.8595,"t":0.886},{"ep":660,"reward":248.9,"miss":89.22,"widt":14.57,"width":3.328,"cov":0.867,"t":0.9065},{"ep":665,"reward":308.0,"miss":22.87,"widt":5.36,"width":3.337,"cov":0.8585,"t":0.9205},{"ep":670,"reward":-9.4,"miss":37.39,"widt":7.89,"width":2.817,"cov":0.8705,"t":0.9075},{"ep":675,"reward":273.5,"miss":23.37,"widt":5.2,"width":3.308,"cov":0.877,"t":0.93},{"ep":680,"reward":227.2,"miss":34.2,"widt":6.83,"width":3.301,"cov":0.883,"t":0.933},{"ep":685,"reward":276.7,"miss":45.04,"widt":6.64,"width":3.917,"cov":0.837,"t":0.9405},{"ep":690,"reward":-16.1,"miss":125.07,"widt":15.58,"width":3.187,"cov":0.822,"t":0.9335},{"ep":695,"reward":297.3,"miss":18.18,"widt":4.66,"width":3.453,"cov":0.868,"t":0.945},{"ep":700,"reward":275.0,"miss":24.32,"widt":4.4,"width":3.672,"cov":0.901,"t":0.9445},{"ep":705,"reward":299.6,"miss":53.47,"widt":9.59,"width":2.908,"cov":0.855,"t":0.913},{"ep":710,"reward":287.9,"miss":461.7,"widt":45.02,"width":3.178,"cov":0.824,"t":0.947},{"ep":715,"reward":247.9,"miss":157.73,"widt":18.84,"width":3.544,"cov":0.832,"t":0.939},{"ep":720,"reward":299.2,"miss":163.33,"widt":22.09,"width":2.982,"cov":0.8645,"t":0.917},{"ep":725,"reward":273.7,"miss":165.77,"widt":18.35,"width":3.132,"cov":0.822,"t":0.939},{"ep":730,"reward":269.8,"miss":17.47,"widt":3.91,"width":3.543,"cov":0.88,"t":0.939},{"ep":735,"reward":283.2,"miss":46.06,"widt":6.25,"width":2.753,"cov":0.8685,"t":0.9185},{"ep":740,"reward":286.7,"miss":91.57,"widt":10.95,"width":2.932,"cov":0.88,"t":0.9215},{"ep":745,"reward":257.6,"miss":164.58,"widt":15.29,"width":3.288,"cov":0.902,"t":0.9295},{"ep":750,"reward":274.9,"miss":43.12,"widt":6.77,"width":3.146,"cov":0.8625,"t":0.919},{"ep":755,"reward":280.7,"miss":49.55,"widt":6.24,"width":3.365,"cov":0.881,"t":0.93},{"ep":760,"reward":271.0,"miss":85.66,"widt":11.99,"width":3.196,"cov":0.8615,"t":0.9145},{"ep":765,"reward":268.6,"miss":57.51,"widt":7.21,"width":3.341,"cov":0.8475,"t":0.933},{"ep":770,"reward":-53.6,"miss":518.72,"widt":34.5,"width":2.944,"cov":0.858,"t":0.9265},{"ep":775,"reward":68.2,"miss":62.01,"widt":6.98,"width":3.563,"cov":0.8695,"t":0.945},{"ep":780,"reward":33.6,"miss":8.97,"widt":2.96,"width":3.114,"cov":0.882,"t":0.914},{"ep":785,"reward":242.4,"miss":183.13,"widt":17.84,"width":3.514,"cov":0.896,"t":0.934},{"ep":790,"reward":12.2,"miss":68.1,"widt":8.61,"width":3.172,"cov":0.874,"t":0.9075},{"ep":795,"reward":297.4,"miss":16.99,"widt":4.09,"width":3.706,"cov":0.8615,"t":0.9275},{"ep":800,"reward":274.8,"miss":22.57,"widt":5.34,"width":3.315,"cov":0.8535,"t":0.9145}];
+
+function drawTrainingDynamics() {
+  const svg = document.getElementById('trainDynSVG');
+  if (!svg) return;
+
+  // Layout: each panel = title row (above plot) + plot body
+  const W = 920, H = 500;
+  const ml = 60, mr = 60, mt = 20, mb = 45;
+  const plotW = W - ml - mr;
+  const TITLE_H = 18;
+  const GAP = 8;
+  const N_PANELS = 4;
+  const PANEL_H = (H - mt - mb - N_PANELS * TITLE_H - (N_PANELS - 1) * GAP) / N_PANELS;
+
+  // Panel definitions. `key` for single-series; `series` (array of {key,color,label}) for multi-series.
+  const panels = [
+    { key: 'reward', title: 'episode reward',       yMin: -200, yMax: 320,  fmt: v => v.toFixed(0),  color: '#1f3a6e', ref: { v: 200, label: 'solve = 200' }, smoothWindow: 21, peakMark: false },
+    { key: 'width',  title: 'mean interval width',  yMin: 2,    yMax: 6,    fmt: v => v.toFixed(1),  color: '#6a4a8c', ref: null,                              smoothWindow: 11, peakMark: true  },
+    { key: 'cov',    title: 'observed coverage',    yMin: 0.80, yMax: 0.92, fmt: v => v.toFixed(2),  color: '#2c7a3f', ref: { v: 0.85, label: 'target 0.85' }, smoothWindow: 5,  peakMark: false },
+    { key: 't',      title: 'coverage knob t',      yMin: 0.89, yMax: 0.95, fmt: v => v.toFixed(2),  color: '#a06000', ref: null,                              smoothWindow: 5,  peakMark: false },
+  ];
+  // Compute y-positions
+  panels.forEach((p, i) => {
+    const top    = mt + i * (TITLE_H + PANEL_H + GAP);
+    p.titleY = top + 13;
+    p.y0     = top + TITLE_H;
+    p.h      = PANEL_H;
+  });
+
+  // Centered moving-average smoothing
+  function smooth(vals, window) {
+    const half = Math.floor(window / 2);
+    const out = [];
+    for (let i = 0; i < vals.length; i++) {
+      const lo = Math.max(0, i - half);
+      const hi = Math.min(vals.length, i + half + 1);
+      let sum = 0;
+      for (let j = lo; j < hi; j++) sum += vals[j];
+      out.push(sum / (hi - lo));
+    }
+    return out;
+  }
+
+  const xAt = i => ml + i * plotW / (TRAIN_DATA.length - 1);
+  const yAt = (v, p) => p.y0 + p.h * (1 - (v - p.yMin) / (p.yMax - p.yMin));
+  const clip = (v, p) => Math.max(p.yMin, Math.min(p.yMax, v));
+  const makePath = (vals, p) => {
+    let d = `M ${xAt(0)},${yAt(clip(vals[0], p), p)}`;
+    for (let i = 1; i < vals.length; i++) d += ` L ${xAt(i)},${yAt(clip(vals[i], p), p)}`;
+    return d;
+  };
+
+  // Precompute series (raw + smoothed) for every data key referenced
+  const seriesByKey = {};
+  panels.forEach(p => {
+    const keys = p.series ? p.series.map(s => s.key) : [p.key];
+    keys.forEach(k => {
+      if (!seriesByKey[k]) {
+        const raw = TRAIN_DATA.map(d => d[k]);
+        seriesByKey[k] = { raw, sm: smooth(raw, p.smoothWindow) };
+      }
+    });
+  });
+
+  let s = '';
+  panels.forEach(p => {
+    // Title row: panel name (left), start→end annotation (right)
+    if (p.series) {
+      // Multi-series: title plus a tiny color-coded legend
+      s += `<text x="${ml}" y="${p.titleY}" font-size="15" font-weight="700" fill="#1c1c1c">${p.title}</text>`;
+      // Inline legend after title
+      let legendX = ml + 130;
+      p.series.forEach(ser => {
+        s += `<line x1="${legendX}" y1="${p.titleY - 4}" x2="${legendX + 18}" y2="${p.titleY - 4}" stroke="${ser.color}" stroke-width="3"/>`;
+        s += `<text x="${legendX + 22}" y="${p.titleY}" font-size="12" fill="${ser.color}" font-weight="600">${ser.label}</text>`;
+        legendX += 240;
+      });
+    } else {
+      const sm = seriesByKey[p.key].sm;
+      const startV = sm[0], endV = sm[sm.length - 1];
+      s += `<text x="${ml}" y="${p.titleY}" font-size="15" font-weight="700" fill="${p.color}">${p.title}</text>`;
+      s += `<text x="${ml + plotW}" y="${p.titleY}" font-size="13" font-weight="500" fill="${p.color}" text-anchor="end" opacity="0.85">${p.fmt(startV)} &rarr; ${p.fmt(endV)}</text>`;
+    }
+    // Plot background + frame
+    s += `<rect x="${ml}" y="${p.y0}" width="${plotW}" height="${p.h}" fill="#fafafa" stroke="#cccccc" stroke-width="0.6"/>`;
+    // Y-axis ticks + gridlines
+    [p.yMin, (p.yMin + p.yMax)/2, p.yMax].forEach(v => {
+      const y = yAt(v, p);
+      s += `<line x1="${ml}" y1="${y}" x2="${ml + plotW}" y2="${y}" stroke="#e8e8e8" stroke-dasharray="2 3"/>`;
+      s += `<text x="${ml - 6}" y="${y + 4}" font-size="11" text-anchor="end" fill="#5a5a5a">${p.fmt(v)}</text>`;
+    });
+    // Reference line
+    if (p.ref) {
+      const y = yAt(p.ref.v, p);
+      s += `<line x1="${ml}" y1="${y}" x2="${ml + plotW}" y2="${y}" stroke="${p.color}" stroke-width="1.4" stroke-dasharray="5 3" opacity="0.8"/>`;
+      s += `<text x="${ml + plotW + 4}" y="${y + 4}" font-size="11" fill="${p.color}" font-style="italic">${p.ref.label}</text>`;
+    }
+  });
+
+  // X-axis labels (shared across all panels — placed below the last panel)
+  const xAxisY = panels[N_PANELS - 1].y0 + panels[N_PANELS - 1].h;
+  [0, 200, 400, 600, 800].forEach(ep => {
+    const x = ml + plotW * ep / 800;
+    s += `<text x="${x}" y="${xAxisY + 14}" font-size="11" text-anchor="middle" fill="#5a5a5a">${ep}</text>`;
+  });
+  s += `<text x="${ml + plotW/2}" y="${xAxisY + 32}" font-size="12" text-anchor="middle" fill="#1c1c1c" font-weight="600">training episode</text>`;
+
+  // Draw each panel's lines
+  panels.forEach(p => {
+    const drawSeries = (key, color) => {
+      const { raw, sm } = seriesByKey[key];
+      // Raw (faint) line
+      s += `<path d="${makePath(raw, p)}" fill="none" stroke="${color}" stroke-width="0.9" opacity="0.35"/>`;
+      // Smoothed (bold) — animated
+      s += `<path d="${makePath(sm, p)}"  fill="none" stroke="${color}" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round" class="td-line"/>`;
+      // Endpoint dots
+      const startV = sm[0], endV = sm[sm.length - 1];
+      s += `<circle cx="${xAt(0)}" cy="${yAt(clip(startV, p), p)}" r="3" fill="${color}"/>`;
+      s += `<circle cx="${xAt(sm.length-1)}" cy="${yAt(clip(endV, p), p)}" r="3" fill="${color}"/>`;
+    };
+    if (p.series) {
+      p.series.forEach(ser => drawSeries(ser.key, ser.color));
+    } else {
+      drawSeries(p.key, p.color);
+      // Peak marker for single-series panels with peakMark=true
+      if (p.peakMark) {
+        const sm = seriesByKey[p.key].sm;
+        let maxIdx = 0, maxV = sm[0];
+        for (let i = 1; i < sm.length; i++) if (sm[i] > maxV) { maxV = sm[i]; maxIdx = i; }
+        const peakX = xAt(maxIdx), peakY = yAt(maxV, p);
+        s += `<circle cx="${peakX}" cy="${peakY}" r="4.5" fill="none" stroke="${p.color}" stroke-width="1.6"/>`;
+        s += `<text x="${peakX}" y="${peakY - 9}" font-size="11" fill="${p.color}" font-style="italic" text-anchor="middle">peak ${p.fmt(maxV)}</text>`;
+      }
+    }
+  });
+
+  svg.innerHTML = s;
+  if (window.MathJax && window.MathJax.typesetPromise) window.MathJax.typesetPromise([svg]);
+
+  // Animation: smoothed lines draw progressively, all in parallel, single 4-second sweep,
+  // then stay static. Loops after a 2-second pause.
+  const lines = svg.querySelectorAll('.td-line');
+  lines.forEach(l => {
+    const len = l.getTotalLength();
+    l.dataset.len = len;
+    l.style.strokeDasharray = `${len} ${len}`;
+    l.style.strokeDashoffset = len;
+  });
+
+  const DRAW_MS = 4500, HOLD_MS = 2500;
+  let t0 = null;
+  function frame(t) {
+    if (!t0) t0 = t;
+    const cycle = (t - t0) % (DRAW_MS + HOLD_MS);
+    const phase = Math.min(cycle / DRAW_MS, 1);
+    // ease-out: sqrt makes the early reveal feel faster
+    const eased = Math.sqrt(phase);
+    lines.forEach(l => {
+      const len = parseFloat(l.dataset.len);
+      l.style.strokeDashoffset = len * (1 - eased);
+    });
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+drawTrainingDynamics();
+</script>
+
+</body>
+</html>

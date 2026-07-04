@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+
+# Environment
+.venv/
+venv/
+env/
+.env
+.conda/
+
+# Logs
+logs/
+*.log
+
+# Model checkpoints and experiment results (large binaries)
+checkpoints/
+*.pt
+Credal LunarLander/results/
+
+# OS
+.DS_Store

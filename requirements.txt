@@ -1,0 +1,11 @@
+# Install with: pip install -r requirements.txt
+# Note: gymnasium[box2d] builds box2d-py from source and requires swig
+# (available via: brew install swig)
+torch
+numpy
+gymnasium[box2d]
+pillow
+imageio
+matplotlib
+bluebird-dt
+bluebird-gymnasium
