@@ -182,9 +182,12 @@ def capture_updates(store):
     Patched on the BASE class so SpyNode subclasses are covered too."""
     orig = IntervalNode.update
 
-    def patched(self, g):
-        store.append((id(self), g))
-        return orig(self, g)
+    def patched(self, g_l, g_u=None):
+        # envelope mode backs up a scalar (g_u None -> == g_l); record the
+        # scalar for hand recomputation, tuple if hybrid ever instrumented
+        store.append((id(self), g_l if g_u is None or g_u == g_l
+                      else (g_l, g_u)))
+        return orig(self, g_l, g_u)
 
     IntervalNode.update = patched
     try:
@@ -204,13 +207,13 @@ class InstrumentedAgent(IntervalMCTSAgent):
         self._cur = None
 
     def _step_sim(self, env, callsigns, planned_cs, planned_action, depth, frozen):
-        r, done, violated, next_cs = super()._step_sim(
+        r, done, violated, next_cs, planned_obs = super()._step_sim(
             env, callsigns, planned_cs, planned_action, depth, frozen)
         if self._cur is not None:
             self._cur["steps"].append(
                 {"action": planned_action, "depth": depth, "r": r,
                  "done": done, "violated": violated})
-        return r, done, violated, next_cs
+        return r, done, violated, next_cs, planned_obs
 
     def _simulate(self, root, env, callsigns, planned_cs, frozen):
         self._cur = {"steps": [], "updates": []}
@@ -386,11 +389,13 @@ def check1():
         dv = rn.visit_count - sn.visit
         dl = abs(rn.lower - sn.lo)
         du = abs(rn.upper - sn.hi)
-        dr = abs(rn.ret_sum - sn.ret)
+        # envelope mode: lo_sum accumulates the scalar g per visit, so it
+        # equals the old ret_sum
+        dr = abs(rn.lo_sum - sn.ret)
         line = (f"{path_str(p):<30s} N {rn.visit_count}=={sn.visit} "
                 f"lower {rn.lower:+.6f} (d={dl:.1e}) "
                 f"upper {rn.upper:+.6f} (d={du:.1e}) "
-                f"ret_sum {rn.ret_sum:+.6f} (d={dr:.1e})")
+                f"ret_sum {rn.lo_sum:+.6f} (d={dr:.1e})")
         print("    " + line)
         evidence.append(line)
         if dv != 0:
@@ -431,7 +436,8 @@ def check2():
     planned_cs, _ = riskiest_callsign(agent, obs, info)
 
     with capture_created_nodes() as created:
-        action, widths = agent._plan_single(env, list(obs.keys()), planned_cs, {})
+        action, widths, _chosen = agent._plan_single(
+            env, list(obs.keys()), planned_cs, {})
     root = created[0]
     nodes = collect_real(root)
     print(f"\nPlanned {planned_cs}; chosen action {act_name(action)}; "
@@ -459,7 +465,7 @@ def check2():
         if n_term < 0:
             failures.append(f"{path_str(p)}: visit flow broken "
                             f"(N={nd.visit_count} < children sum {kid_sum})")
-        if not (math.isfinite(nd.ret_sum) and math.isfinite(nd.lower)
+        if not (math.isfinite(nd.lo_sum) and math.isfinite(nd.lower)
                 and math.isfinite(nd.upper)):
             failures.append(f"{path_str(p)}: non-finite statistic")
 
@@ -595,10 +601,12 @@ def check3():
 # ============================================================================
 
 def _mknode(lo, hi, visits, ret=None):
+    # envelope mode: lower/upper are properties over lo_min/up_max
     nd = IntervalNode()
     nd.visit_count = visits
-    nd.lower, nd.upper = lo, hi
-    nd.ret_sum = ret if ret is not None else visits * (lo + hi) / 2.0
+    nd.lo_min, nd.up_max = lo, hi
+    total = ret if ret is not None else visits * (lo + hi) / 2.0
+    nd.lo_sum = nd.up_sum = total
     return nd
 
 
@@ -617,7 +625,7 @@ class _StubSimAgent(IntervalMCTSAgent):
 
 def _root_pick(preset, c_act):
     agent = _StubSimAgent(preset, n_simulations=1, c_act=c_act)
-    action, _ = agent._plan_single(None, ["X"], "X", {})
+    action, _, _ = agent._plan_single(None, ["X"], "X", {})
     return action
 
 
@@ -911,7 +919,7 @@ class AutopsyAgent(IntervalMCTSAgent):
 
     def _plan_single(self, live_env, root_callsigns, planned_cs, frozen):
         with capture_created_nodes() as created:
-            action, widths = super()._plan_single(
+            action, widths, _chosen = super()._plan_single(
                 live_env, root_callsigns, planned_cs, frozen)
         root = created[0]
         rec = {"cs": planned_cs, "chosen": action,
@@ -919,7 +927,7 @@ class AutopsyAgent(IntervalMCTSAgent):
                         for a, c in root.children.items()}}
         if self._cur_call is not None:
             self._cur_call["planned"].append(rec)
-        return action, widths
+        return action, widths, _chosen
 
 
 def check7(beam_width=32, autopsy_from=55, autopsy_to=80, ff_to=65):

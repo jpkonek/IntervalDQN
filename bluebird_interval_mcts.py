@@ -109,10 +109,25 @@ EARTH_RADIUS_NM = 3440.065
 # ENVIRONMENT CONSTRUCTION
 # ============================================================================
 
-def make_env(scenario_duration: int = 600) -> InfiniteEnv:
-    """Build the target BluebirdATC environment (verified configuration)."""
+def make_env(scenario_duration: int = 600,
+             centreline_coeff: float = 0.2,
+             encoder_cls: str = "extra_minimal",
+             k_nearest: int = 2) -> InfiniteEnv:
+    """Build the target BluebirdATC environment (verified configuration).
+
+    centreline_coeff 0.2 matches bluebird_interval_dqn's outcome-anchored
+    reward regime (run 4 onward), keeping episode returns comparable
+    across the two agents. Pass 1.0 to reproduce the run-2/3 regime.
+
+    encoder_cls / k_nearest only shape the observation vectors; planning
+    itself is model-free on the simulator state. They matter in hybrid
+    mode, where the leaf net reads horizon observations: they must match
+    the DQN checkpoint's training encoder (main() reads them from the
+    checkpoint metadata — DESIGN_REVISIONS item 5).
+    """
     cfg = InfiniteEnv.get_default_env_config()
-    cfg.state_repr_config = {"encoder_cls": "extra_minimal", "k_nearest_aircraft": 2}
+    cfg.state_repr_config = {"encoder_cls": encoder_cls,
+                             "k_nearest_aircraft": k_nearest}
     cfg.action_config = {"simple_heading_left": [10], "simple_heading_right": [10]}
     cfg.reward_config = {
         "fns": [
@@ -120,7 +135,7 @@ def make_env(scenario_duration: int = 600) -> InfiniteEnv:
             "lateral_centreline_distance_shaped",
             "safety_simple_avoidance_exp",
         ],
-        "coeffs": [1.0, 1.0, 1.2],
+        "coeffs": [1.0, centreline_coeff, 1.2],
     }
     cfg.scenario_config["scenario_name"] = ScenarioName.sector_xplus
     cfg.view_config["type"] = "decentralized"
@@ -155,6 +170,18 @@ def aircraft_states(info: dict, callsigns) -> Dict[str, Tuple[float, float, floa
 def _status(info: dict, cs: str) -> str:
     entry = info.get(cs)
     return str(entry.get("pos_status", "")) if isinstance(entry, dict) else ""
+
+
+def _exit_potential(env, cs):
+    """Minus the along-track distance (nm) to the aircraft's exit, or None.
+    Potential for progress shaping (see IntervalMCTSAgent.progress_coeff)."""
+    try:
+        d = env.get_tracked_aircraft_data(cs)
+    except Exception:
+        return None
+    if d is None or d.track_dist_to_exit_cr is None:
+        return None
+    return -float(d.track_dist_to_exit_cr)
 
 
 def _tracker_callsigns(info: dict) -> List[str]:
@@ -231,22 +258,56 @@ def violation_involving(info: dict, planned_cs: str) -> bool:
 
 @dataclass
 class IntervalNode:
-    """Tree node holding a running [min, max] envelope over backed-up returns."""
+    """Tree node holding interval statistics over backed-up returns.
+
+    Two backup modes (set per-agent, passed at construction):
+
+    - "envelope" (model-free default): each simulation backs up one scalar
+      return g; the node interval is the running [min, max] envelope. The
+      credal object is "range over explored continuations". Envelopes never
+      tighten with visits and are visit-count biased (documented).
+    - "mean" (hybrid, exactly analogous to interval DQN and to the Nim-era
+      nim_interval_mcts backup): each simulation backs up an INTERVAL
+      [g_l, g_u] (path rewards plus the interval-DQN leaf bootstrap at the
+      horizon); the node keeps separate running MEANS of lower and upper.
+      Intervals tighten with visits and are comparable across visit counts.
+    """
+    mode: str = "envelope"
     visit_count: int = 0
-    ret_sum: float = 0.0
-    lower: float = math.inf     # running min of returns through this node
-    upper: float = -math.inf    # running max of returns through this node
+    lo_sum: float = 0.0
+    up_sum: float = 0.0
+    lo_min: float = math.inf
+    up_max: float = -math.inf
     children: Dict[int, "IntervalNode"] = field(default_factory=dict)
 
-    def update(self, g: float) -> None:
+    def update(self, g_l: float, g_u: float = None) -> None:
+        if g_u is None:
+            g_u = g_l
         self.visit_count += 1
-        self.ret_sum += g
-        self.lower = min(self.lower, g)
-        self.upper = max(self.upper, g)
+        self.lo_sum += g_l
+        self.up_sum += g_u
+        self.lo_min = min(self.lo_min, g_l)
+        self.up_max = max(self.up_max, g_u)
+
+    @property
+    def lower(self) -> float:
+        if self.visit_count == 0:
+            return math.inf
+        return (self.lo_sum / self.visit_count if self.mode == "mean"
+                else self.lo_min)
+
+    @property
+    def upper(self) -> float:
+        if self.visit_count == 0:
+            return -math.inf
+        return (self.up_sum / self.visit_count if self.mode == "mean"
+                else self.up_max)
 
     @property
     def mean(self) -> float:
-        return self.ret_sum / self.visit_count if self.visit_count else 0.0
+        if self.visit_count == 0:
+            return 0.0
+        return (self.lo_sum + self.up_sum) / (2 * self.visit_count)
 
     @property
     def width(self) -> float:
@@ -273,9 +334,22 @@ class IntervalMCTSAgent:
         pw_k: float = 1.0,              # progressive widening: max_children =
         pw_alpha: float = 0.5,          #   max(1, k * N^alpha), capped at 3
         violation_penalty: float = -50.0,
+        exit_bonus: float = 10.0,       # planning reward for a clean exit inside
+                                        # the rollout; without it, exiting ends the
+                                        # income stream early and the planner has a
+                                        # mild ANTI-exit incentive (outcome anchoring,
+                                        # mirroring bluebird_interval_dqn run 4+)
+        progress_coeff: float = 0.05,   # potential-based progress shaping
+                                        # (gamma*phi' - phi with phi = -dist to
+                                        # exit), mirroring bluebird_interval_dqn
         alert_radius_nm: float = 15.0,  # neighbours farther than this: NOOP, no search
         alert_fl: float = 20.0,         # vertical gate for "neighbour" (level flights here)
         max_planned: int = 4,           # budget cap: riskiest-first searches per decision
+        leaf_value_path: Optional[str] = None,  # interval-DQN checkpoint for
+                                        # hybrid leaf bootstrap (switches the
+                                        # backup to running-mean bounds)
+        leaf_c: Optional[float] = None, # Hurwicz c for the leaf state's value
+                                        # (default: c_search)
         rng: Optional[random.Random] = None,
     ):
         self.n_simulations = n_simulations
@@ -287,6 +361,8 @@ class IntervalMCTSAgent:
         self.pw_k = pw_k
         self.pw_alpha = pw_alpha
         self.violation_penalty = violation_penalty
+        self.exit_bonus = exit_bonus
+        self.progress_coeff = progress_coeff
         self.alert_radius_nm = alert_radius_nm
         self.alert_fl = alert_fl
         self.max_planned = max_planned
@@ -294,7 +370,43 @@ class IntervalMCTSAgent:
 
         # Diagnostics (read after each generate_action call)
         self.last_root_widths: List[float] = []   # root child interval widths
+        self.last_root_choices: Dict[str, Tuple[float, float]] = {}
         self.last_n_planned: int = 0
+
+        # Hybrid mode: interval-DQN leaf evaluator + running-mean backup
+        # (exactly analogous to the DQN update and the nim_interval_mcts
+        # ancestor). Without it: model-free [min, max] envelope backup.
+        self.leaf_net = None
+        self.leaf_c = leaf_c if leaf_c is not None else c_search
+        self.backup_mode = "envelope"
+        if leaf_value_path is not None:
+            import torch  # noqa: local import — torch optional in model-free mode
+            import bluebird_interval_dqn as bid
+            self._torch = torch
+            dqn_agent, ckpt = bid.load_agent(leaf_value_path, device="cpu")
+            self.leaf_net = dqn_agent.q_net.eval()
+            self.backup_mode = "mean"
+            ckpt_gamma = ckpt.get("gamma")
+            if ckpt_gamma is not None and abs(ckpt_gamma - gamma) > 1e-9:
+                print(f"  [leaf-value] WARNING: checkpoint gamma {ckpt_gamma} "
+                      f"!= planner gamma {gamma}; bootstrap scale will be "
+                      f"inconsistent")
+            print(f"  [leaf-value] hybrid backup: mean bounds, leaf net from "
+                  f"{leaf_value_path} (ep {ckpt.get('episode', '?')}, "
+                  f"{ckpt.get('n_actions', '?')} actions), leaf_c={self.leaf_c}")
+
+    def _leaf_interval(self, obs_vec):
+        """Interval-DQN value of a horizon state: the net's [Q_l, Q_u] for
+        its Hurwicz-greedy action at leaf_c. The net may know actions the
+        planner does not execute (e.g. route_parallel); that is fine — this
+        is 'value if the DQN policy took over from here'."""
+        torch = self._torch
+        with torch.no_grad():
+            s = torch.from_numpy(
+                np.asarray(obs_vec, dtype=np.float32)).unsqueeze(0)
+            lo, up = self.leaf_net(s)
+            a = int((lo + self.leaf_c * (up - lo)).argmax(dim=1))
+            return float(lo[0, a]), float(up[0, a])
 
     # ------------------------------------------------------------------
     # Competition interface
@@ -303,6 +415,7 @@ class IntervalMCTSAgent:
     def generate_action(self, env, observation_dict: dict, info_dict: dict) -> Dict[str, int]:
         """Plan a joint action for all controllable aircraft."""
         self.last_root_widths = []
+        self.last_root_choices = {}
         self.last_n_planned = 0
 
         callsigns = list(observation_dict.keys())
@@ -344,9 +457,12 @@ class IntervalMCTSAgent:
 
         # --- Sequential per-aircraft search, riskiest first.
         for cs in to_plan:
-            action, widths = self._plan_single(env, callsigns, cs, dict(decided))
+            action, widths, chosen_env = self._plan_single(
+                env, callsigns, cs, dict(decided))
             decided[cs] = action
             self.last_root_widths.extend(widths)
+            if chosen_env is not None:
+                self.last_root_choices[cs] = chosen_env
             self.last_n_planned += 1
 
         return {cs: decided.get(cs, NOOP) for cs in callsigns}
@@ -358,9 +474,9 @@ class IntervalMCTSAgent:
     def _plan_single(
         self, live_env, root_callsigns: List[str], planned_cs: str,
         frozen: Dict[str, int],
-    ) -> Tuple[int, List[float]]:
+    ) -> Tuple[int, List[float], Optional[Tuple[float, float]]]:
         """Run interval MCTS for one aircraft; return (action, root widths)."""
-        root = IntervalNode()
+        root = IntervalNode(mode=self.backup_mode)
 
         for _ in range(self.n_simulations):
             sim_env = copy.deepcopy(live_env)   # generative model = real sim
@@ -380,17 +496,29 @@ class IntervalMCTSAgent:
                 best_score, best_action = score, a
 
         widths = [c.width for c in root.children.values() if c.visit_count > 0]
-        return best_action, widths
+        chosen = root.children.get(best_action)
+        chosen_env = ((chosen.lower, chosen.upper)
+                      if chosen is not None and chosen.visit_count > 0
+                      else None)
+        return best_action, widths, chosen_env
 
     def _simulate(
         self, root: IntervalNode, env, callsigns: List[str],
         planned_cs: str, frozen: Dict[str, int],
     ) -> None:
-        """One simulation: select/expand down the tree, NOOP rollout, backup."""
+        """One simulation: select/expand down the tree, NOOP rollout, backup.
+
+        Model-free mode backs up a scalar return g (g_l == g_u). Hybrid mode
+        (leaf_net set) adds the interval-DQN leaf bootstrap at the horizon,
+        so each simulation backs up an interval [g_l, g_u] — the exact tree
+        analogue of the DQN's interval Bellman target.
+        """
         node = root
         path = [root]
-        g, disc = 0.0, 1.0
+        g_l = g_u = 0.0
+        disc = 1.0
         depth, done = 0, False
+        planned_obs = None
 
         # --- Selection / expansion (tree phase)
         while depth < self.horizon:
@@ -410,17 +538,19 @@ class IntervalMCTSAgent:
                 action = self._select_action(node)
                 expanding = False
 
-            r, done, violated, callsigns = self._step_sim(
+            r, done, violated, callsigns, planned_obs = self._step_sim(
                 env, callsigns, planned_cs, action, depth, frozen)
-            g += disc * r
+            g_l += disc * r
+            g_u += disc * r
             if violated:
-                g += disc * self.violation_penalty
+                g_l += disc * self.violation_penalty
+                g_u += disc * self.violation_penalty
             disc *= self.gamma
             depth += 1
 
             child = node.children.get(action)
             if child is None:
-                child = IntervalNode()
+                child = IntervalNode(mode=self.backup_mode)
                 node.children[action] = child
             path.append(child)
             node = child
@@ -434,19 +564,30 @@ class IntervalMCTSAgent:
         # --- Rollout phase: planned aircraft holds heading (NOOP policy)
         if not done:
             while depth < self.horizon:
-                r, done, violated, callsigns = self._step_sim(
+                r, done, violated, callsigns, planned_obs = self._step_sim(
                     env, callsigns, planned_cs, NOOP, depth, frozen)
-                g += disc * r
+                g_l += disc * r
+                g_u += disc * r
                 if violated:
-                    g += disc * self.violation_penalty
+                    g_l += disc * self.violation_penalty
+                    g_u += disc * self.violation_penalty
                 disc *= self.gamma
                 depth += 1
                 if done or violated:
                     break
 
-        # --- Backup: total discounted return into every node on the path
+        # --- Hybrid leaf bootstrap: horizon reached without a terminal ->
+        # complete the return with the interval network's value at s_H,
+        # exactly as the DQN's Bellman target completes r + gamma*[L', U'].
+        # Terminal simulations stay grounded in the actual outcome.
+        if self.leaf_net is not None and not done and planned_obs is not None:
+            q_l, q_u = self._leaf_interval(planned_obs)
+            g_l += disc * q_l
+            g_u += disc * q_u
+
+        # --- Backup into every node on the path
         for nd in path:
-            nd.update(g)
+            nd.update(g_l, g_u)
 
     def _select_action(self, node: IntervalNode) -> int:
         """In-tree selection: optimistic Hurwicz + visit-count bonus."""
@@ -465,7 +606,7 @@ class IntervalMCTSAgent:
     def _step_sim(
         self, env, callsigns: List[str], planned_cs: str,
         planned_action: int, depth: int, frozen: Dict[str, int],
-    ) -> Tuple[float, bool, bool, List[str]]:
+    ) -> Tuple[float, bool, bool, List[str], Optional[np.ndarray]]:
         """Step a deepcopied sim one tick.
 
         Frozen (already-decided) aircraft apply their chosen heading change on
@@ -482,17 +623,33 @@ class IntervalMCTSAgent:
             else:
                 actions[cs] = NOOP
 
+        phi = (_exit_potential(env, planned_cs)
+               if self.progress_coeff else None)
         obs, rew, term, trunc, info = env.step(actions)
         next_callsigns = list(obs.keys())
 
         r = float(rew.get(planned_cs, 0.0))
+        truncated = bool(trunc.get(planned_cs, False))
         done = (
             planned_cs not in obs
             or bool(term.get(planned_cs, False))
-            or bool(trunc.get(planned_cs, False))
+            or truncated
         )
         violated = violation_involving(info, planned_cs)
-        return r, done, violated, next_callsigns
+        # Outcome anchoring: a clean exit inside the rollout earns the exit
+        # bonus (guards: not the sim time limit, not an excursion — those are
+        # violations, and a same-step OUT_SECTOR status never collects).
+        if (done and not truncated and not violated
+                and _status(info, planned_cs) != "OUT_SECTOR"):
+            r += self.exit_bonus
+        # Progress shaping on non-terminal steps, mirroring the DQN: pay for
+        # approaching the exit, refund on retreat (potential-based, so it
+        # cannot change which action is optimal — it densifies the signal).
+        if self.progress_coeff and not done and phi is not None:
+            phi_next = _exit_potential(env, planned_cs)
+            if phi_next is not None:
+                r += self.progress_coeff * (self.gamma * phi_next - phi)
+        return r, done, violated, next_callsigns, obs.get(planned_cs)
 
 
 # ============================================================================
@@ -507,13 +664,19 @@ def run_episode(
     seed: int = 42,
     scenario_duration: int = 600,
     verbose: bool = True,
+    encoder_cls: str = "extra_minimal",
+    k_nearest: int = 2,
 ) -> dict:
     """Run one full episode; agent=None means the all-NOOP baseline.
+
+    encoder_cls / k_nearest must match the leaf net's training encoder in
+    hybrid mode (main() derives them from the checkpoint metadata).
 
     Returns a stats dict: time-to-first-violation (headline metric), episode
     return, decision latencies, mean root interval widths.
     """
-    env = make_env(scenario_duration=scenario_duration)
+    env = make_env(scenario_duration=scenario_duration,
+                   encoder_cls=encoder_cls, k_nearest=k_nearest)
     obs, info = env.reset(seed=seed)
 
     ep_return = 0.0
@@ -525,19 +688,56 @@ def run_episode(
     first_violation_desc: Optional[str] = None
     step = 0
 
+    # Realized-coverage instrumentation (agent runs only): for each searched
+    # decision, the chosen root child's envelope predicts an H-step shaped
+    # return; we accumulate each aircraft's live shaped rewards under the
+    # planner's own accounting and score the envelopes post-episode.
+    decision_records = []          # (cs, step_idx, lower, upper)
+    shaped = {}                    # cs -> {step_idx: shaped reward}
+    stream_end = {}                # cs -> terminal step_idx (inclusive)
+
     while True:
         t0 = time.perf_counter()
         if agent is not None:
             action = agent.generate_action(env, obs, info)
             widths.extend(agent.last_root_widths)
             n_planned_total += agent.last_n_planned
+            for cs, (lo, up) in agent.last_root_choices.items():
+                decision_records.append((cs, step, lo, up))
         else:
             action = {cs: NOOP for cs in obs}
         latencies.append(time.perf_counter() - t0)
 
+        prev_obs_cs = list(obs.keys())
+        phi_prev = ({cs: _exit_potential(env, cs) for cs in prev_obs_cs}
+                    if agent is not None and agent.progress_coeff else {})
         obs, rew, term, trunc, info = env.step(action)
         step += 1
         ep_return += float(sum(rew.values()))
+
+        if agent is not None:
+            # live shaped rewards under the planner's own accounting
+            for cs in prev_obs_cs:
+                if cs in stream_end:
+                    continue
+                r = float(rew.get(cs, 0.0))
+                truncated = bool(trunc.get(cs, False))
+                done_cs = (cs not in obs or bool(term.get(cs, False))
+                           or truncated)
+                if violation_involving(info, cs):
+                    r += agent.violation_penalty
+                    done_cs = True
+                elif (done_cs and not truncated
+                        and _status(info, cs) != "OUT_SECTOR"):
+                    r += agent.exit_bonus
+                if agent.progress_coeff and not done_cs:
+                    phi, phi_next = phi_prev.get(cs), _exit_potential(env, cs)
+                    if phi is not None and phi_next is not None:
+                        r += agent.progress_coeff * (
+                            agent.gamma * phi_next - phi)
+                shaped.setdefault(cs, {})[step - 1] = r
+                if done_cs:
+                    stream_end[cs] = step - 1
 
         if first_violation_step is None:
             viol = find_violations(info)
@@ -556,9 +756,43 @@ def run_episode(
         if not obs or all(term.values()) or all(trunc.values()):
             break
 
+    # Score realized H-step shaped returns against the chosen envelopes.
+    # A decision is scored only if its H-step window resolved: the aircraft
+    # terminated inside it, or all H live steps exist. Otherwise censored
+    # (episode ended first) — same discipline as the DQN realized tracker.
+    n_hit = n_scored = n_censored = 0
+    if agent is not None:
+        H = agent.horizon
+        for cs, k, lo, up in decision_records:
+            stream = shaped.get(cs, {})
+            end = stream_end.get(cs)
+            last = min(k + H - 1, end if end is not None else k + H - 1)
+            idxs = list(range(k, last + 1))
+            if any(j not in stream for j in idxs):
+                n_censored += 1
+                continue
+            if end is None and len(idxs) < H:
+                n_censored += 1
+                continue
+            if (agent.backup_mode == "mean"
+                    and (end is None or end > k + H - 1)):
+                # hybrid envelopes include a gamma^H leaf-bootstrap tail;
+                # a tail-less realized H-step return is only comparable
+                # when the aircraft actually terminated inside the window
+                n_censored += 1
+                continue
+            G = 0.0
+            for j in reversed(idxs):
+                G = stream[j] + agent.gamma * G
+            n_scored += 1
+            n_hit += int(lo - 1e-9 <= G <= up + 1e-9)
+
     return {
         "steps": step,
         "episode_return": ep_return,
+        "realized_h_coverage": (n_hit / n_scored) if n_scored else None,
+        "scored_decisions": n_scored,
+        "censored_decisions": n_censored,
         "first_violation_step": first_violation_step,
         "first_violation_time_s": first_violation_time,
         # censored at the scenario duration when clean, so means aggregate
@@ -590,6 +824,10 @@ def print_stats(name: str, stats: dict) -> None:
           f"max {stats['max_latency_s']*1000:.1f} ms")
     print(f"  MCTS searches run       : {stats['n_searches']}")
     print(f"  mean root interval width: {stats['mean_root_width']:.4f}")
+    if stats.get("realized_h_coverage") is not None:
+        print(f"  realized H-step coverage: {stats['realized_h_coverage']:.3f} "
+              f"({stats['scored_decisions']} scored, "
+              f"{stats['censored_decisions']} censored)")
 
 
 # ============================================================================
@@ -606,6 +844,19 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--sims", type=int, default=24, help="simulations per search")
     parser.add_argument("--horizon", type=int, default=15, help="rollout horizon (env steps)")
+    parser.add_argument("--leaf-value", type=str, default=None,
+                        help="interval-DQN checkpoint for the hybrid leaf "
+                             "bootstrap; switches backup to running-mean "
+                             "bounds (exact interval-DQN analogy)")
+    parser.add_argument("--leaf-c", type=float, default=None,
+                        help="Hurwicz c for leaf state values "
+                             "(default: c_search)")
+    parser.add_argument("--progress-coeff", type=float, default=0.05,
+                        help="potential-based progress shaping coefficient "
+                             "(pay for approaching the exit; 0 disables)")
+    parser.add_argument("--exit-bonus", type=float, default=10.0,
+                        help="planning reward for a clean exit inside the rollout "
+                             "(outcome anchoring; 0 restores the old objective)")
     parser.add_argument("--c-act", type=float, default=0.1,
                         help="Hurwicz c for the executed root action (pessimistic)")
     parser.add_argument("--c-search", type=float, default=0.8,
@@ -624,6 +875,20 @@ def main() -> None:
     random.seed(args.seed)
     np.random.seed(args.seed)
 
+    # Hybrid mode: the leaf net reads the horizon observations, so the env
+    # MUST be built with the encoder the checkpoint was trained on
+    # (DESIGN_REVISIONS item 5). Model-free mode keeps the historic default.
+    encoder_cls, k_nearest = "extra_minimal", 2
+    if args.leaf_value is not None:
+        import torch  # local import — torch optional in model-free mode
+        ckpt_meta = torch.load(args.leaf_value, map_location="cpu",
+                               weights_only=False)
+        encoder_cls = ckpt_meta.get("encoder_cls", "extra_minimal")
+        k_nearest = ckpt_meta.get("k", 2)
+        print(f"[leaf-value] env reconstructed from checkpoint metadata: "
+              f"encoder_cls={encoder_cls}, k_nearest={k_nearest} "
+              f"({args.leaf_value})")
+
     if args.baseline:
         print(f"All-NOOP baseline | seed {args.seed} | duration {args.duration}s")
         stats = run_episode(None, seed=args.seed, scenario_duration=args.duration)
@@ -638,11 +903,14 @@ def main() -> None:
         agent = IntervalMCTSAgent(
             n_simulations=8, horizon=8, gamma=args.gamma,
             c_search=args.c_search, c_act=args.c_act, c_visit=args.c_visit,
+        exit_bonus=args.exit_bonus, progress_coeff=args.progress_coeff,
+        leaf_value_path=args.leaf_value, leaf_c=args.leaf_c,
             alert_radius_nm=1e9, alert_fl=1e9, max_planned=2,
             rng=random.Random(args.seed),
         )
         t0 = time.time()
-        stats = run_episode(agent, seed=args.seed, scenario_duration=120)
+        stats = run_episode(agent, seed=args.seed, scenario_duration=120,
+                            encoder_cls=encoder_cls, k_nearest=k_nearest)
         print(f"\nSmoke episode wall time: {time.time()-t0:.1f} s")
         print_stats("Interval MCTS (smoke)", stats)
 
@@ -669,11 +937,14 @@ def main() -> None:
     agent = IntervalMCTSAgent(
         n_simulations=args.sims, horizon=args.horizon, gamma=args.gamma,
         c_search=args.c_search, c_act=args.c_act, c_visit=args.c_visit,
+        exit_bonus=args.exit_bonus, progress_coeff=args.progress_coeff,
+        leaf_value_path=args.leaf_value, leaf_c=args.leaf_c,
         alert_radius_nm=args.alert_radius, alert_fl=args.alert_fl,
         max_planned=args.max_planned, rng=random.Random(args.seed),
     )
     t0 = time.time()
-    stats = run_episode(agent, seed=args.seed, scenario_duration=args.duration)
+    stats = run_episode(agent, seed=args.seed, scenario_duration=args.duration,
+                        encoder_cls=encoder_cls, k_nearest=k_nearest)
     print(f"\nEpisode wall time: {time.time()-t0:.1f} s")
     print_stats("Interval MCTS", stats)
 

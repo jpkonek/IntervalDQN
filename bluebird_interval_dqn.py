@@ -83,21 +83,93 @@ CHECKPOINT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 # ============================================================================
 
 class ReplayBuffer:
+    """Stores n-step windows (state, action, R_n, next_state, disc) where
+    R_n is the discounted n-step reward sum and disc is the bootstrap
+    discount factor: gamma^m for an m-step bootstrapped window, 0.0 for a
+    window that reached a terminal (the target IS the realized return)."""
+
     def __init__(self, capacity=BUFFER_SIZE):
         self.buffer = deque(maxlen=capacity)
 
-    def push(self, state, action, reward, next_state, done):
-        self.buffer.append((state, action, reward, next_state, done))
+    def push(self, state, action, reward, next_state, disc):
+        self.buffer.append((state, action, reward, next_state, disc))
 
     def sample(self, batch_size):
         batch = random.sample(self.buffer, batch_size)
-        states, actions, rewards, next_states, dones = zip(*batch)
+        states, actions, rewards, next_states, discs = zip(*batch)
         return (np.array(states), np.array(actions),
                 np.array(rewards, dtype=np.float32),
-                np.array(next_states), np.array(dones, dtype=np.float32))
+                np.array(next_states), np.array(discs, dtype=np.float32))
 
     def __len__(self):
         return len(self.buffer)
+
+
+class NStepWindower:
+    """Per-aircraft n-step replay-window builder over a transition stream.
+
+    Feeds (s, a, R_n, s_next, disc) windows into the replay buffer as soon
+    as they are determined (Rainbow-style uncorrected n-step, per
+    DESIGN_REVISIONS item 3):
+
+      - full window i (n rewards available, aircraft alive at i+n):
+        R_n = sum_{k<n} gamma^k r_{i+k}, s_next = state at i+n,
+        disc = gamma^n;
+      - terminal at stream index T, window i > T-n: R_n = the exact
+        realized discounted tail sum_{k=i..T} gamma^{k-i} r_k,
+        s_next = zeros, disc = 0.0 (the bootstrap VANISHES);
+      - censored stream end (episode over, aircraft alive, m < n rewards
+        after i): bootstrap at the LAST available next state with
+        disc = gamma^m (variable-length bootstrap — censored data still
+        trains).
+
+    With n = 1 this reproduces the previous 1-step scheme exactly,
+    including truncation semantics: a time-limit truncated aircraft is
+    NOT terminal (its stream is censored -> bootstrap with disc = gamma),
+    while a genuine terminal (clean exit / vanished / violation) gets
+    disc = 0. Stored states are the SAME array objects the caller passes.
+    """
+
+    def __init__(self, buffer, gamma, n):
+        self.buffer = buffer
+        self.gamma = gamma
+        self.n = n
+        self.pending = []    # [(s, a, r)] awaiting enough future rewards
+        self.last_ns = None  # next state of the most recent transition
+
+    def _window_return(self, i):
+        return sum(self.gamma ** k * r
+                   for k, (_s, _a, r) in enumerate(self.pending[i:]))
+
+    def add(self, s, a, r, ns, terminal):
+        """Record one transition; emit every window it completes."""
+        self.pending.append((s, a, r))
+        self.last_ns = ns
+        if terminal:
+            # every pending window sees the terminal inside it: exact
+            # realized tail, no bootstrap
+            zeros = np.zeros_like(ns)
+            for i in range(len(self.pending)):
+                s_i, a_i, _ = self.pending[i]
+                self.buffer.push(s_i, a_i, self._window_return(i),
+                                 zeros, 0.0)
+            self.pending.clear()
+        elif len(self.pending) == self.n:
+            s_0, a_0, _ = self.pending[0]
+            self.buffer.push(s_0, a_0, self._window_return(0), ns,
+                             self.gamma ** self.n)
+            self.pending.pop(0)
+
+    def flush_censored(self):
+        """Episode ended with the aircraft still alive: emit the remaining
+        windows with a variable-length bootstrap (disc = gamma^m) at the
+        last available next state."""
+        for i in range(len(self.pending)):
+            s_i, a_i, _ = self.pending[i]
+            m = len(self.pending) - i
+            self.buffer.push(s_i, a_i, self._window_return(i),
+                             self.last_ns, self.gamma ** m)
+        self.pending.clear()
 
 
 # ============================================================================
@@ -184,8 +256,14 @@ class IntervalDQNAgent:
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=lr)
         self.buffer = ReplayBuffer(buffer_size)
 
-        # Adaptive coverage
+        # Adaptive coverage — the tracker (and hence t) is driven by REALIZED
+        # returns of finished aircraft streams (record_realized_stream), not
+        # by bootstrapped Bellman targets. Bootstrap coverage is kept as a
+        # logging-only comparison metric.
         self.coverage_tracker = CoverageTracker(target=target_coverage)
+        self.bootstrap_hits = deque(maxlen=2000)
+        self.realized_streams = 0
+        self.censored_streams = 0
 
         # Warmup with epsilon-greedy (env-step based)
         self.warmup_steps = warmup_steps
@@ -199,7 +277,40 @@ class IntervalDQNAgent:
 
     @property
     def coverage(self):
+        """Realized coverage (drives t)."""
         return self.coverage_tracker.coverage
+
+    @property
+    def bootstrap_coverage(self):
+        """Coverage of bootstrapped target midpoints (logging only)."""
+        return sum(self.bootstrap_hits) / max(1, len(self.bootstrap_hits))
+
+    def record_realized_stream(self, states, actions, rewards):
+        """Feed one terminated aircraft's realized returns to the t controller.
+
+        Arguments are the aircraft's full in-sector trajectory in order;
+        rewards already carry the terminal exit bonus / violation penalty.
+        The realized discounted return-to-go G_k is computed backward and
+        each hit (G_k inside the current net's [Q_l, Q_u] at (s_k, a_k))
+        goes into the coverage tracker that adapts t. Only finished flights
+        reach this method — censored streams have unknown returns.
+        """
+        if not states:
+            return
+        G, returns = 0.0, [0.0] * len(rewards)
+        for k in range(len(rewards) - 1, -1, -1):
+            G = rewards[k] + self.gamma * G
+            returns[k] = G
+        with torch.no_grad():
+            s = torch.FloatTensor(np.asarray(states, dtype=np.float32)).to(self.device)
+            a = torch.LongTensor(actions).to(self.device)
+            lower, upper = self.q_net(s)
+            l_a = lower.gather(1, a.unsqueeze(1)).squeeze(1).cpu().numpy()
+            u_a = upper.gather(1, a.unsqueeze(1)).squeeze(1).cpu().numpy()
+        g = np.asarray(returns, dtype=np.float32)
+        hits = ((g >= l_a) & (g <= u_a)).astype(np.float32)
+        self.coverage_tracker.record(hits.tolist())
+        self.realized_streams += 1
 
     def _epsilon(self, force_epsilon=None):
         if force_epsilon is not None:
@@ -209,10 +320,44 @@ class IntervalDQNAgent:
             return self.warmup_epsilon * (1 - progress)
         return 0.0
 
-    def generate_action(self, obs_dict, c=None, force_epsilon=None):
+    @staticmethod
+    def adaptive_c(widths, c_low=0.0, c_high=0.3, w_mid=4.0, k=2.0):
+        """Width-dependent Hurwicz parameter, ported from the LunarLander
+        implementation: wide intervals -> low c (cautious), narrow -> higher
+        c (balanced), sigmoid transition. Vectorised: `widths` is a tensor
+        of per-aircraft mean interval widths -> per-aircraft c. In the
+        multi-aircraft setting this IS a state-conditioned risk attitude:
+        aircraft near traffic have wider intervals (verified by the width
+        perturbation diagnostic) and act cautiously; aircraft in the clear
+        act more optimistically (chase their exits). w_mid must be
+        calibrated to the checkpoint's width scale (LunarLander used 4.0;
+        run-7 nets live around 12-20) — see calibrate_w_mid().
+        """
+        t = torch.sigmoid(-k * (widths - w_mid))
+        return c_low + t * (c_high - c_low)
+
+    def calibrate_w_mid(self, obs_dicts):
+        """Set the adaptive-c midpoint to the median per-aircraft mean width
+        over a sample of observation dicts (e.g. one probe episode)."""
+        widths = []
+        with torch.no_grad():
+            for od in obs_dicts:
+                if not od:
+                    continue
+                s = torch.from_numpy(np.stack(list(od.values()))
+                                     .astype(np.float32)).to(self.device)
+                lower, upper = self.q_net(s)
+                widths.extend((upper - lower).mean(dim=1).cpu().tolist())
+        self.adaptive_w_mid = float(np.median(widths)) if widths else 4.0
+        return self.adaptive_w_mid
+
+    def generate_action(self, obs_dict, c=None, force_epsilon=None,
+                        adaptive=False):
         """Batched Hurwicz action selection for ALL aircraft in obs_dict.
 
         One forward pass per env step (never per aircraft).
+        adaptive=True: per-aircraft width-dependent c (overrides `c`);
+        requires calibrate_w_mid() first (falls back to 4.0).
         Returns ({callsign: int}, mean_interval_width).
         """
         if not obs_dict:
@@ -226,6 +371,11 @@ class IntervalDQNAgent:
         with torch.no_grad():
             s = torch.from_numpy(states).to(self.device)
             lower, upper = self.q_net(s)
+            if adaptive:
+                per_ac_width = (upper - lower).mean(dim=1)
+                use_c = self.adaptive_c(
+                    per_ac_width,
+                    w_mid=getattr(self, "adaptive_w_mid", 4.0)).unsqueeze(1)
             q = lower + use_c * (upper - lower)
             greedy = q.argmax(dim=1).cpu().numpy()
             mean_width = (upper - lower).mean().item()
@@ -246,10 +396,13 @@ class IntervalDQNAgent:
         targets = target_lower.unsqueeze(0) + alphas.unsqueeze(1) * (
             target_upper - target_lower).unsqueeze(0)
 
-        # Track coverage against midpoint
+        # Bootstrap-target coverage: LOGGING ONLY. The t controller runs on
+        # realized coverage (record_realized_stream). Run 2 showed the
+        # bootstrapped proxy certifying 85% while realized coverage was 0%,
+        # so it no longer steers the loss.
         target_mid = (target_lower + target_upper) / 2
         inside_mid = (target_mid >= lower) & (target_mid <= upper)
-        self.coverage_tracker.record(
+        self.bootstrap_hits.extend(
             inside_mid.detach().cpu().numpy().astype(np.float32).tolist())
 
         t = self.coverage_tracker.t
@@ -280,13 +433,13 @@ class IntervalDQNAgent:
         if len(self.buffer) < self.batch_size:
             return 0.0
 
-        states, actions, rewards, next_states, dones = self.buffer.sample(
+        states, actions, rewards, next_states, discs = self.buffer.sample(
             self.batch_size)
         states = torch.FloatTensor(states).to(self.device)
         actions = torch.LongTensor(actions).to(self.device)
         rewards = torch.FloatTensor(rewards).to(self.device)
         next_states = torch.FloatTensor(next_states).to(self.device)
-        dones = torch.FloatTensor(dones).to(self.device)
+        discs = torch.FloatTensor(discs).to(self.device)
 
         lower, upper = self.q_net(states)
         lower_a = lower.gather(1, actions.unsqueeze(1)).squeeze(1)
@@ -302,8 +455,11 @@ class IntervalDQNAgent:
             tgt_lower = next_lower.gather(1, next_actions.unsqueeze(1)).squeeze(1)
             tgt_upper = next_upper.gather(1, next_actions.unsqueeze(1)).squeeze(1)
 
-            target_l = rewards + self.gamma * tgt_lower * (1 - dones)
-            target_u = rewards + self.gamma * tgt_upper * (1 - dones)
+            # rewards holds the discounted n-step sum R_n; disc is the
+            # per-sample bootstrap factor (gamma^m, or 0 at terminals —
+            # there the target IS the realized return)
+            target_l = rewards + discs * tgt_lower
+            target_u = rewards + discs * tgt_upper
 
         loss = self.interval_loss_sampled(lower_a, upper_a, target_l, target_u)
         if not torch.isfinite(loss):
@@ -338,8 +494,13 @@ class IntervalDQNAgent:
 # ============================================================================
 
 def make_env(scenario_duration=600, k_nearest=2, route_parallel=False,
-             centreline_coeff=0.2):
+             centreline_coeff=0.2, encoder_cls="extra_minimal"):
     """Build the Flight School InfiniteEnv (X-Plus sector, decentralized).
+
+    encoder_cls selects the observation encoder ("extra_minimal" was the
+    run-2..6 default; "relative" adds the exit-relative block and 9
+    features per neighbour incl. a controllable_flag that disambiguates
+    padding from a collision-range neighbour — DESIGN_REVISIONS item 1).
 
     route_parallel adds the simple_heading_route_parallel clearance (steer
     along the current route segment) — the natural tool against wrong-exit
@@ -356,7 +517,7 @@ def make_env(scenario_duration=600, k_nearest=2, route_parallel=False,
     from bluebird_gymnasium.envs.infinite import ScenarioName
 
     cfg = InfiniteEnv.get_default_env_config()
-    cfg.state_repr_config = {"encoder_cls": "extra_minimal",
+    cfg.state_repr_config = {"encoder_cls": encoder_cls,
                              "k_nearest_aircraft": k_nearest}
     cfg.action_config = {"simple_heading_left": [10],
                          "simple_heading_right": [10]}
@@ -383,6 +544,28 @@ def haversine_nm(lat1, lon1, lat2, lon2):
     a = (math.sin(dphi / 2) ** 2
          + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2)
     return 2 * EARTH_RADIUS_NM * math.asin(math.sqrt(a))
+
+
+def exit_potential(env, cs):
+    """Potential for progress shaping: minus the along-track distance (nm)
+    from the aircraft to its exit. None if the env is not tracking cs.
+
+    Used as textbook potential-based shaping, r += coeff * (gamma*phi' - phi):
+    pay a little for getting closer to the exit, take it back for moving
+    away. Payments telescope, so total pay over a flight is fixed by entry
+    and exit positions — it cannot change the optimal policy, it only makes
+    the sparse exit bonus learnable. (The env's own rewards.expeditious
+    variants are not used: expeditious_linear rewards the SIGN OPPOSITE of
+    its docstring as of bluebird-gymnasium 0.2.0, and expeditious_const pays
+    per progressing step, which favours long paths.)
+    """
+    try:
+        d = env.get_tracked_aircraft_data(cs)
+    except Exception:
+        return None
+    if d is None or d.track_dist_to_exit_cr is None:
+        return None
+    return -float(d.track_dist_to_exit_cr)
 
 
 def detect_violation(info):
@@ -491,8 +674,11 @@ def resolve_device(device_arg, state_dim, n_actions, verbose=True):
 # ============================================================================
 
 def run_episode(env, agent, seed, train=True, c=None, violation_penalty=10.0,
-                exit_bonus=10.0):
+                exit_bonus=10.0, progress_coeff=0.05, nstep=6, adaptive=False):
     """Run one episode; ends at first violation or the time limit.
+
+    nstep: length of the n-step interval Bellman windows pushed to replay
+    (see NStepWindower; nstep=1 reproduces the old 1-step scheme exactly).
 
     exit_bonus anchors reward mass on the OUTCOME (LunarLander-style): a
     terminal +bonus when an aircraft leaves cleanly (exit fix / handoff),
@@ -516,15 +702,24 @@ def run_episode(env, agent, seed, train=True, c=None, violation_penalty=10.0,
     n_transitions = 0
     violated = False
     violation_kind = None
+    # per-aircraft (states, actions, rewards) streams for realized-coverage
+    # tracking; resolved on terminal, censored streams are dropped
+    streams = {}
+    # per-aircraft n-step window builders feeding the replay buffer
+    windowers = {}
 
     step_i = -1
     for step_i in range(maxstep):
         force_eps = None if train else 0.0
         actions, mean_width = agent.generate_action(
-            obs, c=c, force_epsilon=force_eps)
+            obs, c=c, force_epsilon=force_eps, adaptive=adaptive)
         if actions:
             width_sum += mean_width
             width_n += 1
+
+        # potentials before the step, for progress shaping
+        phi_prev = ({cs: exit_potential(env, cs) for cs in obs}
+                    if train and progress_coeff else {})
 
         next_obs, rew, done, trunc, info = env.step(actions)
         violated, violation_kind, involved = detect_violation(info)
@@ -558,9 +753,30 @@ def run_episode(env, agent, seed, train=True, c=None, violation_penalty=10.0,
                     # get it (they are usually caught by the violation branch
                     # above; this guard covers a same-step second excursion).
                     r += exit_bonus
-                agent.buffer.push(np.asarray(s, dtype=np.float32), a, r,
-                                  ns, float(terminal))
+
+                # progress shaping on non-terminal steps (terminal steps
+                # carry the outcome reward; skipping them avoids the
+                # positive kick a zeroed terminal potential would give to
+                # far-from-exit violations)
+                if progress_coeff and not terminal:
+                    phi = phi_prev.get(cs)
+                    phi_next = exit_potential(env, cs)
+                    if phi is not None and phi_next is not None:
+                        r += progress_coeff * (agent.gamma * phi_next - phi)
+                s32 = np.asarray(s, dtype=np.float32)
+                if cs not in windowers:
+                    windowers[cs] = NStepWindower(agent.buffer, agent.gamma,
+                                                  nstep)
+                windowers[cs].add(s32, a, r, ns, terminal)
                 n_transitions += 1
+
+                st_s, st_a, st_r = streams.setdefault(cs, ([], [], []))
+                st_s.append(s32)
+                st_a.append(a)
+                st_r.append(r)
+                if terminal:
+                    windowers.pop(cs)  # add() already flushed its windows
+                    agent.record_realized_stream(*streams.pop(cs))
 
             agent.total_env_steps += 1
             loss = agent.train_step()
@@ -574,6 +790,15 @@ def run_episode(env, agent, seed, train=True, c=None, violation_penalty=10.0,
 
         if violated:
             break
+
+    if train:
+        # censored streams still train: flush their remaining windows with
+        # a variable-length bootstrap at the last available next state
+        for w in windowers.values():
+            w.flush_censored()
+        # aircraft still flying at episode end: returns unknown, not counted
+        # by the realized tracker
+        agent.censored_streams += len(streams)
 
     steps_done = step_i + 1
     time_to_violation = (steps_done * SEC_PER_STEP if violated
@@ -599,11 +824,14 @@ def run_episode(env, agent, seed, train=True, c=None, violation_penalty=10.0,
 def ckpt_extra(args):
     """Everything needed to reproduce the training env/targets at eval time."""
     return {"k": args.k,
+            "encoder_cls": args.encoder,
             "route_parallel": args.route_parallel,
             "gamma": args.gamma,
             "exit_bonus": args.exit_bonus,
             "centreline_coeff": args.centreline_coeff,
-            "violation_penalty": args.violation_penalty}
+            "violation_penalty": args.violation_penalty,
+            "progress_coeff": args.progress_coeff,
+            "nstep": args.nstep}
 
 
 def save_checkpoint(agent, path, episode, extra=None):
@@ -651,13 +879,15 @@ def run_training(args, smoke=False):
     tag = "SMOKE TEST" if smoke else "TRAINING"
     print(f"BLUEBIRD INTERVAL DQN — {tag} (seed={args.seed}, "
           f"c_train={args.c_train}, duration={duration}s, "
-          f"episodes={episodes}, k={args.k})")
+          f"episodes={episodes}, encoder={args.encoder}, k={args.k}, "
+          f"nstep={args.nstep})")
     print("=" * 100)
 
     print("Creating environment...")
     env = make_env(scenario_duration=duration, k_nearest=args.k,
                    route_parallel=args.route_parallel,
-                   centreline_coeff=args.centreline_coeff)
+                   centreline_coeff=args.centreline_coeff,
+                   encoder_cls=args.encoder)
     obs, _ = env.reset(seed=args.seed)
     state_dim = int(next(iter(obs.values())).shape[0])
     n_actions = int(env.get_action_parser().get_total_num_actions())
@@ -690,7 +920,9 @@ def run_training(args, smoke=False):
         t0 = time.time()
         stats = run_episode(env, agent, seed=ep_seed, train=True,
                             violation_penalty=args.violation_penalty,
-                            exit_bonus=args.exit_bonus)
+                            exit_bonus=args.exit_bonus,
+                            progress_coeff=args.progress_coeff,
+                            nstep=args.nstep)
         wall = time.time() - t0
         total_steps += stats["steps"]
         eps = agent._epsilon()
@@ -700,7 +932,10 @@ def run_training(args, smoke=False):
             "seed": ep_seed,
             **stats,
             "buffer_size": len(agent.buffer),
-            "coverage": round(agent.coverage, 4),
+            "coverage": round(agent.coverage, 4),          # realized (drives t)
+            "bootstrap_coverage": round(agent.bootstrap_coverage, 4),
+            "realized_streams": agent.realized_streams,
+            "censored_streams": agent.censored_streams,
             "t": round(agent.t, 4),
             "epsilon": round(eps, 4),
             "c_train": agent.c_train,
@@ -713,7 +948,8 @@ def run_training(args, smoke=False):
         vio = (f"VIOLATION[{stats['violation_kind']}]@{stats['time_to_violation']}s"
                if stats["violated"] else f"clean({stats['time_to_violation']}s)")
         print(f"  Ep {ep+1:4d} | {vio:>38} | R:{stats['mean_step_reward']:7.3f} "
-              f"| W:{stats['mean_width']:.3f} Cvg:{agent.coverage:.2f} "
+              f"| W:{stats['mean_width']:.3f} rCvg:{agent.coverage:.2f} "
+              f"bCvg:{agent.bootstrap_coverage:.2f} "
               f"t:{agent.t:.3f} eps:{eps:.3f} | buf:{len(agent.buffer):6d} "
               f"loss:{stats['mean_loss']:.4f} | {record['steps_per_sec']:.1f} st/s")
 
@@ -755,14 +991,30 @@ def run_training(args, smoke=False):
 # EVALUATION
 # ============================================================================
 
-def evaluate(env, agent, c, n_episodes=5, base_seed=10042, verbose=True):
-    """Evaluate at a fixed Hurwicz c over several seeds.
-    Headline metric: mean time-to-first-violation (simulated seconds)."""
+def evaluate(env, agent, c, n_episodes=5, base_seed=10042, verbose=True,
+             adaptive=False):
+    """Evaluate at a fixed Hurwicz c (or adaptive width-conditioned c) over
+    several seeds. Headline metric: mean time-to-first-violation."""
+    if adaptive and not hasattr(agent, "adaptive_w_mid"):
+        # calibrate the sigmoid midpoint on one probe episode's observations
+        probe_obs = []
+        p_obs, _ = env.reset(seed=base_seed - 1)
+        for _ in range(int(getattr(env, "maxstep", 100))):
+            if not p_obs:
+                break
+            probe_obs.append(dict(p_obs))
+            a, _ = agent.generate_action(p_obs, c=0.0, force_epsilon=0.0)
+            p_obs, _, _, _, _ = env.step(a)
+        w_mid = agent.calibrate_w_mid(probe_obs)
+        if verbose:
+            print(f"  adaptive c: w_mid calibrated to {w_mid:.3f} "
+                  f"(median per-aircraft width, {len(probe_obs)} probe steps)")
     ttvs, rewards, widths = [], [], []
     n_violated = 0
     kinds = {}
     for i in range(n_episodes):
-        stats = run_episode(env, agent, seed=base_seed + i, train=False, c=c)
+        stats = run_episode(env, agent, seed=base_seed + i, train=False, c=c,
+                            adaptive=adaptive)
         ttvs.append(stats["time_to_violation"])
         rewards.append(stats["mean_step_reward"])
         widths.append(stats["mean_width"])
@@ -782,7 +1034,8 @@ def evaluate(env, agent, c, n_episodes=5, base_seed=10042, verbose=True):
         "n_episodes": n_episodes,
     }
     if verbose:
-        print(f"  c={c:<4} | time-to-violation: "
+        c_label = "adap" if adaptive else c
+        print(f"  c={c_label:<4} | time-to-violation: "
               f"{result['mean_time_to_violation']:7.1f}s "
               f"± {result['std_time_to_violation']:6.1f} | "
               f"violated: {n_violated}/{n_episodes} {kinds if kinds else ''} | "
@@ -796,6 +1049,8 @@ def run_eval_only(args):
     device = "cpu" if args.device == "auto" else args.device
     agent, ckpt = load_agent(args.ckpt, device=device)
     k = ckpt.get("k", args.k)
+    # checkpoints predating the configurable encoder trained on extra_minimal
+    encoder_cls = ckpt.get("encoder_cls", "extra_minimal")
     route_parallel = ckpt.get("route_parallel", args.route_parallel)
     # default 1.0: checkpoints predating outcome-anchoring trained with the
     # full-strength centreline income
@@ -804,12 +1059,14 @@ def run_eval_only(args):
           f"trained {ckpt.get('episode', '?')} episodes, "
           f"t={ckpt.get('t', 0.5):.3f}")
 
-    print(f"Creating environment (duration {args.duration}s, k={k}, "
+    print(f"Creating environment (duration {args.duration}s, "
+          f"encoder={encoder_cls}, k={k}, "
           f"route_parallel={route_parallel}, "
           f"centreline_coeff={centreline_coeff})...")
     env = make_env(scenario_duration=args.duration, k_nearest=k,
                    route_parallel=route_parallel,
-                   centreline_coeff=centreline_coeff)
+                   centreline_coeff=centreline_coeff,
+                   encoder_cls=encoder_cls)
 
     # keep eval scenarios disjoint from training episode seeds
     # (training uses seed..seed+episodes-1; +10000 matches the in-training
@@ -820,9 +1077,159 @@ def run_eval_only(args):
           f"base seed {eval_seed})")
     print("=" * 100)
     result = evaluate(env, agent, c=args.c, n_episodes=args.eval_episodes,
-                      base_seed=eval_seed)
+                      base_seed=eval_seed,
+                      adaptive=getattr(args, "adaptive", False))
     env.close()
     return result
+
+
+# ============================================================================
+# SELF-TESTS — n-step window semantics (run with --selftest)
+# ============================================================================
+
+class _ListBuffer:
+    """Minimal replay-buffer stub capturing pushes for the self-tests."""
+
+    def __init__(self):
+        self.items = []
+
+    def push(self, s, a, r, ns, disc):
+        self.items.append((s, a, r, ns, disc))
+
+
+def _assert_windows(items, expected, label):
+    assert len(items) == len(expected), (
+        f"{label}: {len(items)} windows, expected {len(expected)}")
+    for i, ((s, a, r, ns, disc),
+            (es, ea, er, ens, edisc)) in enumerate(zip(items, expected)):
+        assert s is es, f"{label} window {i}: state is not the same object"
+        assert a == ea, f"{label} window {i}: action {a} != {ea}"
+        assert abs(r - er) < 1e-9, f"{label} window {i}: R {r} != {er}"
+        assert np.array_equal(ns, ens), f"{label} window {i}: next-state"
+        assert abs(disc - edisc) < 1e-12, (
+            f"{label} window {i}: disc {disc} != {edisc}")
+    print(f"  OK  {label}: {len(items)} windows match hand-computed values")
+
+
+def _selftest_synthetic_windows():
+    """Hand-computed window sums for a synthetic stream (gamma = 0.5,
+    rewards 1,2,3,4 with a terminal at stream index T=3):
+      - n=6 > stream length: every window is the exact realized tail
+        (realized-G collapse — the bootstrap vanishes, disc = 0);
+      - n=2: mixed — two bootstrapped full windows, two realized tails;
+    plus a censored 5-step stream (no terminal) exercising the
+    variable-length gamma^m bootstrap at the last available next state."""
+    print("[selftest] synthetic window sums")
+    gamma = 0.5
+    s = [np.full(2, float(i), dtype=np.float32) for i in range(6)]
+    z = np.zeros(2, dtype=np.float32)
+
+    def feed(n, rewards, terminal_at):
+        buf = _ListBuffer()
+        w = NStepWindower(buf, gamma, n)
+        for i, r in enumerate(rewards):
+            term = (i == terminal_at)
+            w.add(s[i], i, r, z if term else s[i + 1], term)
+        if terminal_at is None:
+            w.flush_censored()
+        return buf.items
+
+    # terminal stream, n=6: exact realized tails G_i, disc 0 everywhere
+    # G_0 = 1 + .5*2 + .25*3 + .125*4 = 3.25; G_1 = 4.5; G_2 = 5; G_3 = 4
+    _assert_windows(
+        feed(6, [1.0, 2.0, 3.0, 4.0], terminal_at=3),
+        [(s[0], 0, 3.25, z, 0.0), (s[1], 1, 4.5, z, 0.0),
+         (s[2], 2, 5.0, z, 0.0), (s[3], 3, 4.0, z, 0.0)],
+        "terminal@3, n=6 (realized-G collapse)")
+
+    # terminal stream, n=2: windows 0,1 bootstrap (gamma^2 = 0.25) at the
+    # state 2 ahead; windows 2,3 contain the terminal -> realized tail
+    _assert_windows(
+        feed(2, [1.0, 2.0, 3.0, 4.0], terminal_at=3),
+        [(s[0], 0, 1.0 + 0.5 * 2.0, s[2], 0.25),
+         (s[1], 1, 2.0 + 0.5 * 3.0, s[3], 0.25),
+         (s[2], 2, 3.0 + 0.5 * 4.0, z, 0.0),
+         (s[3], 3, 4.0, z, 0.0)],
+        "terminal@3, n=2 (mixed windows)")
+
+    # censored stream (episode over, aircraft alive), n=2: full windows
+    # bootstrap normally; the flushed remainder (m=1) bootstraps at the
+    # LAST available next state with disc = gamma^1
+    _assert_windows(
+        feed(2, [1.0, 2.0, 3.0, 4.0, 5.0], terminal_at=None),
+        [(s[0], 0, 1.0 + 0.5 * 2.0, s[2], 0.25),
+         (s[1], 1, 2.0 + 0.5 * 3.0, s[3], 0.25),
+         (s[2], 2, 3.0 + 0.5 * 4.0, s[4], 0.25),
+         (s[3], 3, 4.0 + 0.5 * 5.0, s[5], 0.25),
+         (s[4], 4, 5.0, s[5], 0.5)],
+        "censored, n=2 (variable-length bootstrap)")
+
+
+def _selftest_n1_equivalence(seed=123):
+    """--nstep 1 must reproduce the old 1-step scheme exactly.
+
+    Runs one fixed-seed episode through the REAL pipeline with nstep=1
+    while recording the raw transitions (s, a, r, ns, terminal) at the
+    exact point the old scheme called buffer.push. The expected old-scheme
+    tuples are reconstructed independently from those raws —
+        non-terminal (incl. time-limit truncation): bootstrap, disc=gamma
+        terminal (exit / vanished / violation):     s_next=0,   disc=0
+    — and must equal the windows the new pipeline pushed, in order."""
+    print(f"[selftest] n=1 equivalence on a real episode (seed {seed})")
+    # 600 s: long enough for clean exits, so the terminal branch is hit too
+    env = make_env(scenario_duration=600, k_nearest=2)
+    obs, _ = env.reset(seed=seed)
+    state_dim = int(next(iter(obs.values())).shape[0])
+    n_actions = int(env.get_action_parser().get_total_num_actions())
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    agent = IntervalDQNAgent(state_dim, n_actions, device="cpu",
+                             warmup_steps=20, batch_size=32)
+
+    raws = []
+    orig_add = NStepWindower.add
+
+    def recording_add(self, s, a, r, ns, terminal):
+        raws.append((s, a, r, ns, terminal))
+        return orig_add(self, s, a, r, ns, terminal)
+
+    NStepWindower.add = recording_add
+    try:
+        stats = run_episode(env, agent, seed=seed, train=True, nstep=1)
+    finally:
+        NStepWindower.add = orig_add
+    env.close()
+
+    produced = list(agent.buffer.buffer)
+    assert len(produced) == len(raws), (
+        f"n=1 must emit exactly one window per transition: "
+        f"{len(produced)} windows vs {len(raws)} transitions")
+    n_term = 0
+    for i, ((s, a, r, ns, term),
+            (ps, pa, pr, pns, pdisc)) in enumerate(zip(raws, produced)):
+        assert ps is s, f"transition {i}: state is not the same object"
+        assert pa == a and abs(pr - r) < 1e-9, f"transition {i}: (a, r)"
+        if term:
+            n_term += 1
+            assert pdisc == 0.0, f"transition {i}: terminal must have disc=0"
+            assert not pns.any(), f"transition {i}: terminal next state != 0"
+        else:
+            assert abs(pdisc - agent.gamma) < 1e-12, (
+                f"transition {i}: non-terminal must bootstrap at disc=gamma")
+            assert np.array_equal(pns, ns), f"transition {i}: next-state"
+    print(f"  OK  n=1 equivalence: {len(raws)} transitions "
+          f"({n_term} terminal, {len(raws) - n_term} bootstrapped) over "
+          f"{stats['steps']} env steps — new pipeline == old 1-step scheme")
+
+
+def run_selftest():
+    print("=" * 100)
+    print("N-STEP WINDOW SEMANTICS SELF-TESTS")
+    print("=" * 100)
+    _selftest_synthetic_windows()
+    _selftest_n1_equivalence()
+    print("SELFTEST PASSED")
 
 
 # ============================================================================
@@ -841,6 +1248,9 @@ if __name__ == "__main__":
                         help="Full training with checkpointing + JSONL log")
     parser.add_argument("--eval", action="store_true",
                         help="Eval-only from a checkpoint at a given c")
+    parser.add_argument("--selftest", action="store_true",
+                        help="Run the n-step window semantics self-tests "
+                             "(n=1 equivalence + hand-computed windows)")
     # common
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--episodes", type=int, default=None,
@@ -849,8 +1259,11 @@ if __name__ == "__main__":
                         help="Scenario duration in simulated seconds "
                              "(default: 600; smoke: 120). Use 120 for "
                              "faster early training.")
-    parser.add_argument("--k", type=int, default=2,
+    parser.add_argument("--k", type=int, default=3,
                         help="k nearest aircraft in the observation")
+    parser.add_argument("--encoder", type=str, default="relative",
+                        help="observation encoder_cls (run 7 default: "
+                             "relative; runs 2-6 used extra_minimal)")
     parser.add_argument("--device", type=str, default="auto",
                         choices=["auto", "cpu", "mps"],
                         help="auto = benchmark MPS vs CPU and pick faster")
@@ -871,6 +1284,9 @@ if __name__ == "__main__":
                         help="Epsilon warmup env steps (default: 1000; "
                              "smoke: 20)")
     parser.add_argument("--warmup_epsilon", type=float, default=0.5)
+    parser.add_argument("--progress_coeff", type=float, default=0.05,
+                        help="potential-based progress shaping coefficient "
+                             "(pay for approaching the exit; 0 disables)")
     parser.add_argument("--exit_bonus", type=float, default=10.0,
                         help="terminal reward for a clean exit (outcome "
                              "anchoring; set 0 to disable)")
@@ -878,12 +1294,21 @@ if __name__ == "__main__":
                         help="weight of the on-route income shaping term "
                              "(run 2 used 1.0; small keeps returns "
                              "outcome-dominated)")
-    parser.add_argument("--violation_penalty", type=float, default=10.0,
+    parser.add_argument("--violation_penalty", type=float, default=50.0,
                         help="Reward penalty for aircraft involved in a "
-                             "violation (their transition is terminal)")
+                             "violation (their transition is terminal). "
+                             "Run 7 default 50: violations are "
+                             "lexicographically bad, unifying with the "
+                             "MCTS objective (runs 2-6 used 10)")
+    parser.add_argument("--nstep", type=int, default=6,
+                        help="n-step interval Bellman window length "
+                             "(1 reproduces the old 1-step targets)")
     # bookkeeping
     parser.add_argument("--ckpt", type=str, default=None,
                         help="Checkpoint path for --eval")
+    parser.add_argument("--adaptive", action="store_true",
+                        help="eval with width-conditioned per-aircraft c "
+                             "(LunarLander adaptive-c rule; overrides --c)")
     parser.add_argument("--c", type=float, default=0.0,
                         help="Hurwicz c for --eval")
     parser.add_argument("--eval_episodes", type=int, default=5,
@@ -894,7 +1319,9 @@ if __name__ == "__main__":
     parser.add_argument("--ckpt_every", type=int, default=25)
     args = parser.parse_args()
 
-    if args.smoke:
+    if args.selftest:
+        run_selftest()
+    elif args.smoke:
         args.episodes = args.episodes if args.episodes is not None else 2
         args.duration = args.duration if args.duration is not None else 120
         args.warmup_steps = (args.warmup_steps if args.warmup_steps is not None

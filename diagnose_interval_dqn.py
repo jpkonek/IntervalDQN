@@ -397,23 +397,26 @@ def check_4():
     for _ in range(400):
         s = rng.uniform(FEATURE_LOW, FEATURE_HIGH).astype(np.float32)
         ns = rng.uniform(FEATURE_LOW, FEATURE_HIGH).astype(np.float32)
+        # n-step replay semantics (run 7+): the last column is the bootstrap
+        # discount `disc` (gamma^m for an m-step bootstrapped window, 0.0 at
+        # terminals), NOT a done flag
+        disc = 0.0 if rng.random() < 0.1 else float(
+            agent.gamma ** int(rng.integers(1, 7)))
         agent.buffer.push(s, int(rng.integers(0, 3)),
-                          float(rng.normal()), ns,
-                          float(rng.random() < 0.1))
+                          float(rng.normal()), ns, disc)
     random.seed(4242)
-    states, actions, rewards, next_states, dones = agent.buffer.sample(
+    states, actions, rewards, next_states, discs = agent.buffer.sample(
         agent.batch_size)
     with torch.no_grad():
         nl, nu = agent.target_net(torch.from_numpy(
             next_states.astype(np.float32)))
         ol, ou = agent.q_net(torch.from_numpy(next_states.astype(np.float32)))
         na = (ol + agent.c_train * (ou - ol)).argmax(dim=1)
-        tl_exp = (torch.from_numpy(rewards) + agent.gamma *
-                  nl.gather(1, na.unsqueeze(1)).squeeze(1) *
-                  (1 - torch.from_numpy(dones)))
-        tu_exp = (torch.from_numpy(rewards) + agent.gamma *
-                  nu.gather(1, na.unsqueeze(1)).squeeze(1) *
-                  (1 - torch.from_numpy(dones)))
+        d = torch.from_numpy(discs)
+        tl_exp = (torch.from_numpy(rewards) +
+                  d * nl.gather(1, na.unsqueeze(1)).squeeze(1))
+        tu_exp = (torch.from_numpy(rewards) +
+                  d * nu.gather(1, na.unsqueeze(1)).squeeze(1))
     captured = {}
     orig = agent.interval_loss_sampled
 
@@ -436,8 +439,8 @@ def check_4():
     within = bool(((samples >= captured["tl"].unsqueeze(0) - 1e-6) &
                    (samples <= captured["tu"].unsqueeze(0) + 1e-6)).all())
     print(f"  (d) instrumented train_step (batch {agent.batch_size}): "
-          f"T_l == r+gamma*L_next*(1-done): {match_l}; "
-          f"T_u == r+gamma*U_next*(1-done): {match_u}")
+          f"T_l == R_n + disc*L_next: {match_l}; "
+          f"T_u == R_n + disc*U_next: {match_u}")
     print(f"      T_u >= T_l for all: {ordered}; all {len(alphas)} sampled "
           f"targets within [T_l, T_u]: {within}")
     sub["d: Bellman targets + samples in bounds"] = (match_l and match_u
@@ -552,15 +555,28 @@ def check_6(agent, ckpt, n_episodes=3, base_seed=20042, duration=300, c=0.0,
     banner(6, f"EMPIRICAL COVERAGE {tag}— realized discounted return-to-go "
               f"vs predicted [Q_l, Q_u]")
     gamma = ckpt.get("gamma", bid.GAMMA)
+    # reward regime from checkpoint metadata (run 4+: outcome anchoring);
+    # old checkpoints fall back to the run-2/3 regime they trained under
+    exit_bonus = ckpt.get("exit_bonus", 0.0)
+    centreline_coeff = ckpt.get("centreline_coeff", 1.0)
+    route_parallel = ckpt.get("route_parallel", False)
+    violation_penalty = ckpt.get("violation_penalty", violation_penalty)
+    progress_coeff = ckpt.get("progress_coeff", 0.0)
     print(f"  gamma = {gamma} ({'from checkpoint' if 'gamma' in ckpt else 'module default; checkpoint does not store gamma'})")
+    print(f"  reward regime: exit_bonus={exit_bonus}, "
+          f"centreline_coeff={centreline_coeff}, "
+          f"violation_penalty={violation_penalty}, "
+          f"route_parallel={route_parallel}")
     print(f"  {n_episodes} eval episodes, duration {duration}s, c={c}, "
           f"seeds {base_seed}..{base_seed + n_episodes - 1}")
     print("  episode semantics mirror training: ends at first violation; "
           "involved aircraft get -"
           f"{violation_penalty} and terminal; BEFORE_ENTRY steps skipped")
 
-    env = bid.make_env(scenario_duration=duration, k_nearest=2,
-                       route_parallel=False)
+    env = bid.make_env(scenario_duration=duration, k_nearest=ckpt.get("k", 2),
+                       route_parallel=route_parallel,
+                       centreline_coeff=centreline_coeff,
+                       encoder_cls=ckpt.get("encoder_cls", "extra_minimal"))
     trajs = []  # per (episode, callsign): dict(steps=[(q_l,q_u,r)], terminal)
     for epi in range(n_episodes):
         obs, info = env.reset(seed=base_seed + epi)
@@ -579,6 +595,8 @@ def check_6(agent, ckpt, n_episodes=3, base_seed=20042, duration=300, c=0.0,
                 a_star = (lo + c * (up - lo)).argmax(dim=1).cpu().numpy()
                 lo, up = lo.cpu().numpy(), up.cpu().numpy()
             actions = {cs: int(a_star[i]) for i, cs in enumerate(callsigns)}
+            phi_prev = ({cs: bid.exit_potential(env, cs) for cs in callsigns}
+                        if progress_coeff else {})
             next_obs, rew, done, trunc, info = env.step(actions)
             violated, kind, involved = bid.detect_violation(info)
             for i, cs in enumerate(callsigns):
@@ -592,6 +610,15 @@ def check_6(agent, ckpt, n_episodes=3, base_seed=20042, duration=300, c=0.0,
                 if violated and cs in involved:
                     r -= violation_penalty
                     terminal = True
+                elif terminal and not (isinstance(d, dict)
+                                       and d.get("pos_status") == "OUT_SECTOR"):
+                    # mirror training's outcome anchoring (0.0 for old ckpts)
+                    r += exit_bonus
+                if progress_coeff and not terminal:
+                    phi = phi_prev.get(cs)
+                    phi_next = bid.exit_potential(env, cs)
+                    if phi is not None and phi_next is not None:
+                        r += progress_coeff * (gamma * phi_next - phi)
                 st = streams.setdefault(cs, {"steps": [], "terminal": False})
                 if not st["terminal"]:
                     st["steps"].append((float(lo[i, a_star[i]]),
