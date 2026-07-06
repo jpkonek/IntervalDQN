@@ -50,14 +50,39 @@ reflects genuine subtree outcome dispersion.
 
 Joint-action factorisation
 --------------------------
-N aircraft x 3 actions is exponential jointly.  At each live env step we plan
-SEQUENTIALLY per aircraft, ordered by risk (min pairwise lateral separation
-among vertically-proximate neighbours, ascending -- riskiest first):
+N aircraft x A actions is exponential jointly.  At each live env step we plan
+SEQUENTIALLY per aircraft, ordered by risk (ascending time-to-closest-approach
+among vertically-proximate neighbours -- soonest predicted conflict first --
+falling back to current distance):
 
-  * aircraft with no neighbour within ``alert_radius_nm`` (default 15 nm)
-    AND ``alert_fl`` flight levels get NOOP without any search (saves budget);
+  * TTC gating (post seed-10043 autopsy): an aircraft is searched if some
+    vertically-proximate neighbour has predicted closest-approach distance
+    < ``cpa_dist_nm`` (default 8 nm) within ``cpa_time_s`` (default 300 s),
+    OR is already within ``alert_radius_nm`` (default 15 nm, kept as a
+    distance floor).  CPA uses the standard relative-motion formula on a
+    local flat-earth projection from current positions, tracks and ground
+    speeds.  Aircraft with no vertically-proximate neighbour triggering
+    either gate get NOOP without any search (saves budget);
+  * maneuver tracking ("finish the maneuver you started", post seed-10043
+    TTC A/B): the agent remembers which aircraft it has issued non-NOOP
+    heading commands to (``active_maneuvers``).  A heading command cancels
+    route-following, so a commanded aircraft flies a raw heading until
+    somebody says otherwise — if the TTC gate then drops it (conflict
+    resolved), it drifts out of the sector (the seed-10043 AIR-02
+    excursion).  Mid-maneuver aircraft therefore BYPASS the TTC/distance
+    gate and stay search candidates until recovered: the search itself
+    selects NOOP (nothing more needed now) AND the aircraft's heading is
+    within ``recover_hdg_deg`` of the bearing to its sector exit — see
+    _maneuver_recovered for the full justification — or it terminates.
+    Maneuver state is per-episode: run_episode calls reset_episode(), and
+    generate_action additionally auto-resets when env.timestep goes
+    BACKWARDS (robust to agent reuse without an explicit reset);
   * at most ``max_planned`` aircraft are searched per decision (budget cap;
-    the remainder get NOOP);
+    the remainder get NOOP).  Slot priority: (a) gate-engaged aircraft
+    (imminent conflict outranks recovery), riskiest first, then (b)
+    mid-maneuver aircraft needing recovery, then (c) the rest (never
+    searched anyway).  Mid-maneuver aircraft squeezed out by the cap are
+    counted in ``slot_contention_events`` and stay tracked for next step;
   * while planning aircraft i, already-decided aircraft are frozen to their
     chosen action on the FIRST simulated step (a heading change is a one-shot
     instruction) and NOOP afterwards; undecided aircraft fly NOOP throughout.
@@ -94,9 +119,41 @@ import numpy as np
 from bluebird_gymnasium.envs import InfiniteEnv
 from bluebird_gymnasium.envs.infinite import ScenarioName
 
-# Action encoding (verified for this action_config)
+# Action encoding.  NOOP is guaranteed index 0 by the env's ActionParser
+# (ACTION_NOOP = 0).  All OTHER indices depend on the action_config (the
+# parser assigns ints in insertion order), so the planner derives its action
+# set at runtime from env.get_action_parser().action_formatter_map — see
+# derive_action_space() and IntervalMCTSAgent.bind_action_space().
+# The module-level constants below are the LEGACY 3-action layout
+# (macro_turns=False); with macro turns on, index 2 is LEFT_30, not RIGHT_10.
+# They remain only as the agent's pre-bind fallback and for old callers.
 NOOP, LEFT_10, RIGHT_10 = 0, 1, 2
 ALL_ACTIONS = (NOOP, LEFT_10, RIGHT_10)
+DEFAULT_ACTION_NAMES = {NOOP: "NOOP", LEFT_10: "LEFT_10", RIGHT_10: "RIGHT_10"}
+
+
+def derive_action_space(env) -> Tuple[Tuple[int, ...], Dict[int, str]]:
+    """(action ints ascending, {int: short name}) from the env's parser.
+
+    Index order matters — the parser assigns ints by action_config insertion
+    order — so everything downstream must derive from this map instead of
+    hardcoding indices.
+    """
+    amap = env.get_action_parser().action_formatter_map
+    if amap.get(NOOP) != "action_noop":
+        raise RuntimeError(
+            f"action {NOOP} maps to {amap.get(NOOP)!r}, expected 'action_noop'")
+    names: Dict[int, str] = {}
+    for idx, spec in amap.items():
+        if spec == "action_noop":
+            names[idx] = "NOOP"
+        elif spec.startswith("simple_heading_left__"):
+            names[idx] = "LEFT_" + spec.rsplit("__", 1)[1]
+        elif spec.startswith("simple_heading_right__"):
+            names[idx] = "RIGHT_" + spec.rsplit("__", 1)[1]
+        else:
+            names[idx] = spec
+    return tuple(sorted(amap)), names
 
 # ICAO separation minima used for violation detection
 LOS_LATERAL_NM = 5.0
@@ -112,7 +169,8 @@ EARTH_RADIUS_NM = 3440.065
 def make_env(scenario_duration: int = 600,
              centreline_coeff: float = 0.2,
              encoder_cls: str = "extra_minimal",
-             k_nearest: int = 2) -> InfiniteEnv:
+             k_nearest: int = 2,
+             macro_turns: bool = True) -> InfiniteEnv:
     """Build the target BluebirdATC environment (verified configuration).
 
     centreline_coeff 0.2 matches bluebird_interval_dqn's outcome-anchored
@@ -124,11 +182,23 @@ def make_env(scenario_duration: int = 600,
     mode, where the leaf net reads horizon observations: they must match
     the DQN checkpoint's training encoder (main() reads them from the
     checkpoint metadata — DESIGN_REVISIONS item 5).
+
+    macro_turns (default ON, post seed-10043 autopsy) adds 30-degree turn
+    magnitudes so deep multi-ply escapes become shallow: action set
+    {NOOP, LEFT_10, LEFT_30, RIGHT_10, RIGHT_30}. The action config does
+    NOT affect observations, so hybrid leaf nets trained on the 3-action
+    env still value states correctly (the leaf net never maps planner
+    actions). Pass False to reproduce the legacy 3-action layout.
     """
     cfg = InfiniteEnv.get_default_env_config()
     cfg.state_repr_config = {"encoder_cls": encoder_cls,
                              "k_nearest_aircraft": k_nearest}
-    cfg.action_config = {"simple_heading_left": [10], "simple_heading_right": [10]}
+    if macro_turns:
+        cfg.action_config = {"simple_heading_left": [10, 30],
+                             "simple_heading_right": [10, 30]}
+    else:
+        cfg.action_config = {"simple_heading_left": [10],
+                             "simple_heading_right": [10]}
     cfg.reward_config = {
         "fns": [
             "position_status_const",
@@ -165,6 +235,65 @@ def aircraft_states(info: dict, callsigns) -> Dict[str, Tuple[float, float, floa
         for cs in callsigns
         if cs in sim.aircraft
     }
+
+
+NM_PER_DEG_LAT = 60.0          # 1 arcminute of latitude ~ 1 nm
+KT_TO_NM_PER_S = 1.0 / 3600.0
+
+
+def aircraft_kinematics(info: dict, callsigns) -> Dict[
+        str, Tuple[float, float, float, Optional[float], Optional[float]]]:
+    """(lat, lon, fl, track_deg, speed_kt) per callsign from the sim state.
+
+    Track prefers ground_track_angle, falling back to heading; speed prefers
+    ground_speed, falling back to speed_tas (the predictors may not have
+    populated all of them on the very first steps — None means unknown and
+    CPA gating for that aircraft degrades to the distance floor).
+    """
+    sim = info["simulator_environment"]
+    out = {}
+    for cs in callsigns:
+        ac = sim.aircraft.get(cs)
+        if ac is None:
+            continue
+        trk = getattr(ac, "ground_track_angle", None)
+        if trk is None:
+            trk = getattr(ac, "heading", None)
+        spd = getattr(ac, "ground_speed", None)
+        if spd is None:
+            spd = getattr(ac, "speed_tas", None)
+        out[cs] = (float(ac.lat), float(ac.lon), float(ac.fl),
+                   None if trk is None else float(trk),
+                   None if spd is None else float(spd))
+    return out
+
+
+def cpa_nm_s(kin_a, kin_b) -> Tuple[Optional[float], Optional[float]]:
+    """Time to closest approach (s) and distance at closest approach (nm)
+    for two aircraft_kinematics tuples, assuming straight-line flight.
+
+    Standard relative-motion CPA on a local flat-earth projection (fine at
+    these tens-of-nm scales).  Diverging pairs clamp t* to 0 (their CPA is
+    now, at the current distance); a (near-)zero relative velocity returns
+    t = inf.  Returns (None, None) if either velocity is unknown.
+    """
+    if kin_a is None or kin_b is None:
+        return None, None
+    la, lo, _, trk_a, spd_a = kin_a
+    lb, lob, _, trk_b, spd_b = kin_b
+    if trk_a is None or spd_a is None or trk_b is None or spd_b is None:
+        return None, None
+    lat0 = math.radians((la + lb) / 2.0)
+    dx = (lob - lo) * NM_PER_DEG_LAT * math.cos(lat0)   # b relative to a, nm
+    dy = (lb - la) * NM_PER_DEG_LAT
+    ra, rb = math.radians(trk_a), math.radians(trk_b)   # deg cw from north
+    rvx = (spd_b * math.sin(rb) - spd_a * math.sin(ra)) * KT_TO_NM_PER_S
+    rvy = (spd_b * math.cos(rb) - spd_a * math.cos(ra)) * KT_TO_NM_PER_S
+    v2 = rvx * rvx + rvy * rvy
+    if v2 < 1e-12:
+        return math.inf, math.hypot(dx, dy)
+    t = max(0.0, -(dx * rvx + dy * rvy) / v2)
+    return t, math.hypot(dx + rvx * t, dy + rvy * t)
 
 
 def _status(info: dict, cs: str) -> str:
@@ -332,7 +461,8 @@ class IntervalMCTSAgent:
         c_act: float = 0.1,             # pessimistic Hurwicz c at the root
         c_visit: float = 3.0,           # UCB visit-count bonus coefficient
         pw_k: float = 1.0,              # progressive widening: max_children =
-        pw_alpha: float = 0.5,          #   max(1, k * N^alpha), capped at 3
+        pw_alpha: float = 0.5,          #   max(1, k * N^alpha), capped at the
+                                        #   action count (root exempt)
         violation_penalty: float = -50.0,
         exit_bonus: float = 10.0,       # planning reward for a clean exit inside
                                         # the rollout; without it, exiting ends the
@@ -342,9 +472,14 @@ class IntervalMCTSAgent:
         progress_coeff: float = 0.05,   # potential-based progress shaping
                                         # (gamma*phi' - phi with phi = -dist to
                                         # exit), mirroring bluebird_interval_dqn
-        alert_radius_nm: float = 15.0,  # neighbours farther than this: NOOP, no search
+        alert_radius_nm: float = 15.0,  # distance floor: neighbour inside -> search
         alert_fl: float = 20.0,         # vertical gate for "neighbour" (level flights here)
+        cpa_dist_nm: float = 8.0,       # TTC gate: search if predicted closest
+        cpa_time_s: float = 300.0,      #   approach < cpa_dist_nm within cpa_time_s
         max_planned: int = 4,           # budget cap: riskiest-first searches per decision
+        recover_hdg_deg: float = 25.0,  # maneuver recovery: |heading - bearing
+                                        # to sector exit| below this (plus a
+                                        # NOOP search verdict) ends tracking
         leaf_value_path: Optional[str] = None,  # interval-DQN checkpoint for
                                         # hybrid leaf bootstrap (switches the
                                         # backup to running-mean bounds)
@@ -365,8 +500,27 @@ class IntervalMCTSAgent:
         self.progress_coeff = progress_coeff
         self.alert_radius_nm = alert_radius_nm
         self.alert_fl = alert_fl
+        self.cpa_dist_nm = cpa_dist_nm
+        self.cpa_time_s = cpa_time_s
         self.max_planned = max_planned
+        self.recover_hdg_deg = recover_hdg_deg
         self.rng = rng or random.Random(0)
+
+        # "Finish the maneuver you started": callsign -> last non-NOOP action
+        # issued this episode, for aircraft not yet recovered.  Episode-scoped
+        # state: cleared by reset_episode() (called from run_episode) and
+        # automatically whenever env.timestep goes backwards (agent reuse
+        # across resets without an explicit call, e.g. in diagnostics).
+        self.active_maneuvers: Dict[str, int] = {}
+        self._last_env_timestep: Optional[int] = None
+        self.slot_contention_events: int = 0   # mid-maneuver dropped by cap
+
+        # Planner action set: derived from the env at first contact (index
+        # order depends on action_config — see derive_action_space). The
+        # legacy 3-action layout is only a pre-bind fallback.
+        self.all_actions: Tuple[int, ...] = ALL_ACTIONS
+        self.action_names: Dict[int, str] = dict(DEFAULT_ACTION_NAMES)
+        self._actions_bound = False
 
         # Diagnostics (read after each generate_action call)
         self.last_root_widths: List[float] = []   # root child interval widths
@@ -408,49 +562,152 @@ class IntervalMCTSAgent:
             a = int((lo + self.leaf_c * (up - lo)).argmax(dim=1))
             return float(lo[0, a]), float(up[0, a])
 
+    def bind_action_space(self, env) -> None:
+        """Derive the planner's action set from the env's action parser
+        (once). Index order depends on action_config, so nothing may be
+        hardcoded beyond NOOP = 0."""
+        if self._actions_bound or env is None:
+            return
+        self.all_actions, self.action_names = derive_action_space(env)
+        self._actions_bound = True
+        print(f"  [actions] planner action space ({len(self.all_actions)}): "
+              + ", ".join(f"{a}={self.action_names[a]}"
+                          for a in self.all_actions))
+
+    # ------------------------------------------------------------------
+    # Maneuver tracking ("finish the maneuver you started")
+    # ------------------------------------------------------------------
+
+    def reset_episode(self) -> None:
+        """Clear per-episode maneuver state.  run_episode calls this right
+        after env.reset(); generate_action also calls it automatically when
+        it sees env.timestep go backwards (agent reused across episodes
+        without an explicit reset)."""
+        self.active_maneuvers.clear()
+        self._last_env_timestep = None
+        self.slot_contention_events = 0
+
+    def _maneuver_recovered(self, env, cs: str) -> bool:
+        """Geometric half of the recovery test (the other half is the search
+        itself selecting NOOP, which the caller checks first).
+
+        Criterion: |heading - bearing(position -> sector exit)| <=
+        recover_hdg_deg.  Justification: the planner's heading commands
+        cancel route-following (BlueSky HDG), so a commanded aircraft flies a
+        RAW straight heading forever — the only clean outcome available to it
+        is flying to its sector exit, and "pointed at the exit" is STABLE
+        under NOOP (a straight line to a point stays on bearing), unlike
+        "near the route centreline", which an aircraft crossing its route at
+        an angle satisfies only momentarily and then diverges again (the
+        exact AIR-02 failure shape).  A route-following aircraft's heading
+        also ends up at the exit, so the test subsumes the on-route case.
+        If the geometry needed to judge is unavailable, stay conservative
+        (not recovered) while the aircraft is still tracked."""
+        try:
+            d = env.get_tracked_aircraft_data(cs)
+        except Exception:
+            return True   # tracker gone -> aircraft gone -> nothing to finish
+        if d is None:
+            return True
+        if (d.heading is None or d.position is None
+                or d.sector_exit_pos is None):
+            return False  # cannot judge yet -> keep watching
+        brg = d.position.bearing_to(d.sector_exit_pos)
+        diff = abs((float(d.heading) - float(brg) + 180.0) % 360.0 - 180.0)
+        return diff <= self.recover_hdg_deg
+
     # ------------------------------------------------------------------
     # Competition interface
     # ------------------------------------------------------------------
 
     def generate_action(self, env, observation_dict: dict, info_dict: dict) -> Dict[str, int]:
         """Plan a joint action for all controllable aircraft."""
+        self.bind_action_space(env)
         self.last_root_widths = []
         self.last_root_choices = {}
         self.last_n_planned = 0
+
+        # Episode-boundary detection for maneuver state: env.timestep is
+        # monotone within an episode and resets to 0 on env.reset(), so
+        # "time went backwards" == new episode (also covers a fresh env).
+        t_now = getattr(env, "timestep", None)
+        if (t_now is not None and self._last_env_timestep is not None
+                and t_now < self._last_env_timestep):
+            self.reset_episode()
+        self._last_env_timestep = t_now
 
         callsigns = list(observation_dict.keys())
         if not callsigns:
             return {}
 
-        states = aircraft_states(info_dict, callsigns)
+        # Prune maneuvers whose aircraft left the controllable set (clean
+        # exit, excursion, or termination): nothing left to command.
+        for cs in list(self.active_maneuvers):
+            if cs not in observation_dict:
+                del self.active_maneuvers[cs]
 
-        # --- Risk assessment: min lateral separation to any vertically-close
-        # neighbour.  Aircraft with no such neighbour inside the alert radius
-        # get NOOP for free.
-        risk: Dict[str, float] = {}
+        states = aircraft_states(info_dict, callsigns)
+        kin = aircraft_kinematics(info_dict, callsigns)
+
+        # --- Risk assessment (TTC gating, post seed-10043 autopsy): an
+        # aircraft is searched if some vertically-close neighbour either
+        #   (a) has predicted closest approach < cpa_dist_nm within
+        #       cpa_time_s (relative-motion CPA from current tracks), or
+        #   (b) is already inside alert_radius_nm (distance floor — also the
+        #       fallback when velocities are not yet known).
+        # Aircraft triggering neither gate (in particular, aircraft with no
+        # vertically-close neighbour at all) get NOOP for free.  Risk order:
+        # ascending time-to-CPA, then ascending current distance.
+        risk: Dict[str, Tuple[float, float]] = {}
+        engaged = set()
         for cs in callsigns:
             if cs not in states:
                 continue
             la, lo, fa = states[cs]
-            dmin = math.inf
+            dmin, ttc_min = math.inf, math.inf
+            trigger = False
             for other, (lb, lob, fb) in states.items():
                 if other == cs or abs(fa - fb) >= self.alert_fl:
                     continue
-                dmin = min(dmin, haversine_nm(la, lo, lb, lob))
-            risk[cs] = dmin
+                d = haversine_nm(la, lo, lb, lob)
+                dmin = min(dmin, d)
+                if d < self.alert_radius_nm:
+                    trigger = True
+                t_cpa, d_cpa = cpa_nm_s(kin.get(cs), kin.get(other))
+                if (t_cpa is not None and d_cpa < self.cpa_dist_nm
+                        and t_cpa < self.cpa_time_s):
+                    trigger = True
+                    ttc_min = min(ttc_min, t_cpa)
+            risk[cs] = (ttc_min, dmin)
+            if trigger:
+                engaged.add(cs)
 
+        # Mid-maneuver aircraft BYPASS the gate: they carry an outstanding
+        # heading command and must keep replanning priority until recovered
+        # (the seed-10043 AIR-02 excursion: TTC gate dropped it once its
+        # conflict resolved, and nobody ever commanded its recovery).
+        midman = set(self.active_maneuvers)
         decided: Dict[str, int] = {
             cs: NOOP for cs in callsigns
-            if risk.get(cs, math.inf) > self.alert_radius_nm
+            if (cs not in engaged and cs not in midman)
             # BEFORE_ENTRY aircraft: the env silently drops their actions and
             # zeroes their rewards — searching them burns budget for a no-op
             or _status(info_dict, cs) == "BEFORE_ENTRY"
         }
-        to_plan = sorted(
-            (cs for cs in callsigns if cs not in decided),
-            key=lambda cs: risk.get(cs, math.inf),
-        )
+        # Slot priority under the max_planned cap: (a) gate-engaged (an
+        # imminent conflict outranks a recovery), riskiest first; then
+        # (b) mid-maneuver aircraft needing recovery, riskiest first.
+        candidates = [cs for cs in callsigns if cs not in decided]
+        rk = lambda cs: risk.get(cs, (math.inf, math.inf))  # noqa: E731
+        to_plan = (sorted((cs for cs in candidates if cs in engaged), key=rk)
+                   + sorted((cs for cs in candidates if cs not in engaged),
+                            key=rk))
         # Budget cap: anything beyond max_planned flies NOOP this step.
+        dropped_mid = [cs for cs in to_plan[self.max_planned:] if cs in midman]
+        if dropped_mid:
+            self.slot_contention_events += len(dropped_mid)
+            print(f"  [maneuver] slot contention: {dropped_mid} mid-maneuver "
+                  f"but dropped by max_planned={self.max_planned}")
         for cs in to_plan[self.max_planned:]:
             decided[cs] = NOOP
         to_plan = to_plan[: self.max_planned]
@@ -464,6 +721,20 @@ class IntervalMCTSAgent:
             if chosen_env is not None:
                 self.last_root_choices[cs] = chosen_env
             self.last_n_planned += 1
+
+            # Maneuver bookkeeping (only for aircraft actually searched: a
+            # cap-dropped NOOP is no evidence of recovery).
+            if action != NOOP:
+                if cs not in self.active_maneuvers:
+                    print(f"  [maneuver] {cs} starts maneuver "
+                          f"({self.action_names.get(action, action)})")
+                self.active_maneuvers[cs] = action
+            elif cs in self.active_maneuvers:
+                if self._maneuver_recovered(env, cs):
+                    print(f"  [maneuver] {cs} recovered (NOOP verdict + "
+                          f"heading within {self.recover_hdg_deg:.0f} deg "
+                          f"of exit bearing)")
+                    del self.active_maneuvers[cs]
 
         return {cs: decided.get(cs, NOOP) for cs in callsigns}
 
@@ -513,25 +784,29 @@ class IntervalMCTSAgent:
         so each simulation backs up an interval [g_l, g_u] — the exact tree
         analogue of the DQN's interval Bellman target.
         """
+        self.bind_action_space(env)   # no-op once bound (diagnostics drive
+                                      # _simulate directly, bypassing
+                                      # generate_action)
         node = root
         path = [root]
         g_l = g_u = 0.0
         disc = 1.0
         depth, done = 0, False
         planned_obs = None
+        actions = self.all_actions
 
         # --- Selection / expansion (tree phase)
         while depth < self.horizon:
-            # Progressive widening gate (3 actions, so mostly a formality --
-            # kept for lineage consistency and to stagger early expansion).
-            # The ROOT is exempt: with only 3 actions, all root children must
-            # exist before selection or small budgets never try the 3rd action.
+            # Progressive widening gate — kept for lineage consistency and to
+            # stagger early expansion (schedule unchanged with macro turns).
+            # The ROOT is exempt: all root children must exist before
+            # selection or small budgets never try the later-indexed actions.
             if node is root:
-                max_children = len(ALL_ACTIONS)
+                max_children = len(actions)
             else:
                 max_children = max(1, int(self.pw_k * max(1, node.visit_count) ** self.pw_alpha))
-            unexpanded = [a for a in ALL_ACTIONS if a not in node.children]
-            if unexpanded and len(node.children) < min(len(ALL_ACTIONS), max_children):
+            unexpanded = [a for a in actions if a not in node.children]
+            if unexpanded and len(node.children) < min(len(actions), max_children):
                 action = self.rng.choice(unexpanded)
                 expanding = True
             else:
@@ -666,6 +941,7 @@ def run_episode(
     verbose: bool = True,
     encoder_cls: str = "extra_minimal",
     k_nearest: int = 2,
+    macro_turns: bool = True,
 ) -> dict:
     """Run one full episode; agent=None means the all-NOOP baseline.
 
@@ -676,8 +952,11 @@ def run_episode(
     return, decision latencies, mean root interval widths.
     """
     env = make_env(scenario_duration=scenario_duration,
-                   encoder_cls=encoder_cls, k_nearest=k_nearest)
+                   encoder_cls=encoder_cls, k_nearest=k_nearest,
+                   macro_turns=macro_turns)
     obs, info = env.reset(seed=seed)
+    if agent is not None:
+        agent.reset_episode()   # clear maneuver tracking (agent may be reused)
 
     ep_return = 0.0
     latencies: List[float] = []
@@ -806,6 +1085,10 @@ def run_episode(
         "max_latency_s": float(np.max(latencies)),
         "mean_root_width": float(np.mean(widths)) if widths else 0.0,
         "n_searches": n_planned_total,
+        # mid-maneuver aircraft squeezed out by max_planned (0 = no slot
+        # contention; persistent >0 argues for raising max_planned)
+        "slot_contention_events": (agent.slot_contention_events
+                                   if agent is not None else 0),
     }
 
 
@@ -823,6 +1106,7 @@ def print_stats(name: str, stats: dict) -> None:
     print(f"  decision latency        : mean {stats['mean_latency_s']*1000:.1f} ms, "
           f"max {stats['max_latency_s']*1000:.1f} ms")
     print(f"  MCTS searches run       : {stats['n_searches']}")
+    print(f"  slot contention events  : {stats.get('slot_contention_events', 0)}")
     print(f"  mean root interval width: {stats['mean_root_width']:.4f}")
     if stats.get("realized_h_coverage") is not None:
         print(f"  realized H-step coverage: {stats['realized_h_coverage']:.3f} "
@@ -864,11 +1148,27 @@ def main() -> None:
     parser.add_argument("--c-visit", type=float, default=3.0, help="UCB visit bonus coeff")
     parser.add_argument("--gamma", type=float, default=0.97)
     parser.add_argument("--alert-radius", type=float, default=15.0,
-                        help="nm; aircraft with no neighbour inside get NOOP unsearched")
+                        help="nm; distance floor of the search gate (a neighbour "
+                             "inside always triggers a search)")
     parser.add_argument("--alert-fl", type=float, default=20.0,
                         help="FL; vertical gate for counting a neighbour")
+    parser.add_argument("--cpa-dist", type=float, default=8.0,
+                        help="nm; TTC gate: search if predicted closest approach "
+                             "is below this within --cpa-time")
+    parser.add_argument("--cpa-time", type=float, default=300.0,
+                        help="s; TTC gate lookahead window (300 s = 50 steps)")
+    parser.add_argument("--macro-turns", action=argparse.BooleanOptionalAction,
+                        default=True,
+                        help="add 30-degree turns to the planner action set "
+                             "{NOOP, L10, L30, R10, R30}; --no-macro-turns "
+                             "restores the legacy 3-action layout")
     parser.add_argument("--max-planned", type=int, default=4,
                         help="max aircraft searched per decision (budget cap)")
+    parser.add_argument("--recover-hdg", type=float, default=25.0,
+                        help="deg; a mid-maneuver aircraft is 'recovered' "
+                             "(stops bypassing the search gate) once the "
+                             "search says NOOP and its heading is within "
+                             "this of the bearing to its sector exit")
     parser.add_argument("--duration", type=int, default=600, help="scenario duration (s)")
     args = parser.parse_args()
 
@@ -891,7 +1191,8 @@ def main() -> None:
 
     if args.baseline:
         print(f"All-NOOP baseline | seed {args.seed} | duration {args.duration}s")
-        stats = run_episode(None, seed=args.seed, scenario_duration=args.duration)
+        stats = run_episode(None, seed=args.seed, scenario_duration=args.duration,
+                            macro_turns=args.macro_turns)
         print_stats("NOOP baseline", stats)
         return
 
@@ -899,23 +1200,28 @@ def main() -> None:
         # Tiny budget; alert gates opened wide so the search machinery is
         # actually exercised (seed-42 traffic is well separated early on,
         # so the production gates would skip every search in 120 s).
-        print("SMOKE TEST: 120 s episode, 8 sims, horizon 8, max_planned 2")
+        print(f"SMOKE TEST: 120 s episode, 8 sims, horizon 8, max_planned 2, "
+              f"macro_turns={args.macro_turns}")
         agent = IntervalMCTSAgent(
             n_simulations=8, horizon=8, gamma=args.gamma,
             c_search=args.c_search, c_act=args.c_act, c_visit=args.c_visit,
         exit_bonus=args.exit_bonus, progress_coeff=args.progress_coeff,
         leaf_value_path=args.leaf_value, leaf_c=args.leaf_c,
-            alert_radius_nm=1e9, alert_fl=1e9, max_planned=2,
+            alert_radius_nm=1e9, alert_fl=1e9,
+            cpa_dist_nm=args.cpa_dist, cpa_time_s=args.cpa_time,
+            max_planned=2, recover_hdg_deg=args.recover_hdg,
             rng=random.Random(args.seed),
         )
         t0 = time.time()
         stats = run_episode(agent, seed=args.seed, scenario_duration=120,
-                            encoder_cls=encoder_cls, k_nearest=k_nearest)
+                            encoder_cls=encoder_cls, k_nearest=k_nearest,
+                            macro_turns=args.macro_turns)
         print(f"\nSmoke episode wall time: {time.time()-t0:.1f} s")
         print_stats("Interval MCTS (smoke)", stats)
 
         print("\nRunning all-NOOP baseline for comparison...")
-        base = run_episode(None, seed=args.seed, scenario_duration=120, verbose=False)
+        base = run_episode(None, seed=args.seed, scenario_duration=120,
+                           verbose=False, macro_turns=args.macro_turns)
         print_stats("NOOP baseline (smoke)", base)
 
         def ttv(s):
@@ -933,18 +1239,23 @@ def main() -> None:
 
     # --run
     print(f"Interval MCTS | seed {args.seed} | sims {args.sims} | horizon {args.horizon} | "
-          f"c_act {args.c_act} | c_search {args.c_search} | duration {args.duration}s")
+          f"c_act {args.c_act} | c_search {args.c_search} | duration {args.duration}s | "
+          f"macro_turns {args.macro_turns} | cpa_dist {args.cpa_dist} nm | "
+          f"cpa_time {args.cpa_time} s")
     agent = IntervalMCTSAgent(
         n_simulations=args.sims, horizon=args.horizon, gamma=args.gamma,
         c_search=args.c_search, c_act=args.c_act, c_visit=args.c_visit,
         exit_bonus=args.exit_bonus, progress_coeff=args.progress_coeff,
         leaf_value_path=args.leaf_value, leaf_c=args.leaf_c,
         alert_radius_nm=args.alert_radius, alert_fl=args.alert_fl,
-        max_planned=args.max_planned, rng=random.Random(args.seed),
+        cpa_dist_nm=args.cpa_dist, cpa_time_s=args.cpa_time,
+        max_planned=args.max_planned, recover_hdg_deg=args.recover_hdg,
+        rng=random.Random(args.seed),
     )
     t0 = time.time()
     stats = run_episode(agent, seed=args.seed, scenario_duration=args.duration,
-                        encoder_cls=encoder_cls, k_nearest=k_nearest)
+                        encoder_cls=encoder_cls, k_nearest=k_nearest,
+                        macro_turns=args.macro_turns)
     print(f"\nEpisode wall time: {time.time()-t0:.1f} s")
     print_stats("Interval MCTS", stats)
 

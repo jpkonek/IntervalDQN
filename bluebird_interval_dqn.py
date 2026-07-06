@@ -79,6 +79,51 @@ CHECKPOINT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 
 # ============================================================================
+# RISK STRATA (opt-in via --strat_t) — nearest-neighbour distance buckets
+# ============================================================================
+# Feature layout of the "relative" encoder with 1 forward fix (BluebirdATC
+# bluebird_gymnasium/state_repr/relative.py, RelativeRepresentation): 20 base
+# features + 7 forward-fix features + one 9-feature block per neighbour.
+# Within each neighbour block: field 3 = distance to that neighbour in
+# NM / 50 (clipped at 150 NM); field 7 = controllable flag (-1/+1 for a real
+# neighbour, 0.0 marks a zero-padded block = no such neighbour).
+# Verified empirically against a live env (2026-07-05 probe): the distance
+# field matches pairwise haversine within 0.3 NM on 2513/2513 blocks, and
+# padded blocks are all-zero. Blocks are NOT guaranteed nearest-first, so the
+# nearest neighbour is the MIN over all non-padded blocks.
+
+N_STRATA = 3
+STRAT_BOUNDS_NM = (10.0, 30.0)   # stratum 0: <10 NM, 1: 10-30 NM, 2: rest
+REL_BASE_AND_FIX = 27            # 20 base + 7 forward-fix features
+REL_NEIGH_FEATS = 9
+REL_NEIGH_DIST = 3               # NM / 50 within the block
+REL_NEIGH_FLAG = 7               # 0.0 == zero padding (no neighbour)
+REL_DIST_SCALE = 50.0
+
+
+def state_stratum(state):
+    """Risk stratum of one relative-encoder observation vector.
+
+    Returns 0 (nearest neighbour <10 NM), 1 (10-30 NM) or
+    2 (>30 NM, or no neighbour at all).
+    """
+    n_blocks = (len(state) - REL_BASE_AND_FIX) // REL_NEIGH_FEATS
+    nearest = None
+    for i in range(n_blocks):
+        base = REL_BASE_AND_FIX + i * REL_NEIGH_FEATS
+        if state[base + REL_NEIGH_FLAG] == 0.0:
+            continue  # zero-padded block: no i-th neighbour
+        d = state[base + REL_NEIGH_DIST] * REL_DIST_SCALE
+        if nearest is None or d < nearest:
+            nearest = d
+    if nearest is None or nearest > STRAT_BOUNDS_NM[1]:
+        return 2
+    if nearest < STRAT_BOUNDS_NM[0]:
+        return 0
+    return 1
+
+
+# ============================================================================
 # REPLAY BUFFER
 # ============================================================================
 
@@ -91,15 +136,20 @@ class ReplayBuffer:
     def __init__(self, capacity=BUFFER_SIZE):
         self.buffer = deque(maxlen=capacity)
 
-    def push(self, state, action, reward, next_state, disc):
-        self.buffer.append((state, action, reward, next_state, disc))
+    def push(self, state, action, reward, next_state, disc, stratum=0):
+        # stratum: small int risk-stratum id recorded at push time
+        # (always 0 when --strat_t is off)
+        self.buffer.append((state, action, reward, next_state, disc, stratum))
 
-    def sample(self, batch_size):
+    def sample(self, batch_size, with_strata=False):
         batch = random.sample(self.buffer, batch_size)
-        states, actions, rewards, next_states, discs = zip(*batch)
-        return (np.array(states), np.array(actions),
-                np.array(rewards, dtype=np.float32),
-                np.array(next_states), np.array(discs, dtype=np.float32))
+        states, actions, rewards, next_states, discs, strata = zip(*batch)
+        out = (np.array(states), np.array(actions),
+               np.array(rewards, dtype=np.float32),
+               np.array(next_states), np.array(discs, dtype=np.float32))
+        if with_strata:
+            return out + (np.array(strata, dtype=np.int64),)
+        return out
 
     def __len__(self):
         return len(self.buffer)
@@ -130,34 +180,38 @@ class NStepWindower:
     disc = 0. Stored states are the SAME array objects the caller passes.
     """
 
-    def __init__(self, buffer, gamma, n):
+    def __init__(self, buffer, gamma, n, strat_fn=None):
         self.buffer = buffer
         self.gamma = gamma
         self.n = n
-        self.pending = []    # [(s, a, r)] awaiting enough future rewards
+        # optional stratum function: window state -> small int stratum id,
+        # recorded at push time (0 for every window when None / flag off)
+        self.strat_fn = strat_fn
+        self.pending = []    # [(s, a, r, stratum)] awaiting future rewards
         self.last_ns = None  # next state of the most recent transition
 
     def _window_return(self, i):
         return sum(self.gamma ** k * r
-                   for k, (_s, _a, r) in enumerate(self.pending[i:]))
+                   for k, (_s, _a, r, _st) in enumerate(self.pending[i:]))
 
     def add(self, s, a, r, ns, terminal):
         """Record one transition; emit every window it completes."""
-        self.pending.append((s, a, r))
+        st = self.strat_fn(s) if self.strat_fn is not None else 0
+        self.pending.append((s, a, r, st))
         self.last_ns = ns
         if terminal:
             # every pending window sees the terminal inside it: exact
             # realized tail, no bootstrap
             zeros = np.zeros_like(ns)
             for i in range(len(self.pending)):
-                s_i, a_i, _ = self.pending[i]
+                s_i, a_i, _, st_i = self.pending[i]
                 self.buffer.push(s_i, a_i, self._window_return(i),
-                                 zeros, 0.0)
+                                 zeros, 0.0, st_i)
             self.pending.clear()
         elif len(self.pending) == self.n:
-            s_0, a_0, _ = self.pending[0]
+            s_0, a_0, _, st_0 = self.pending[0]
             self.buffer.push(s_0, a_0, self._window_return(0), ns,
-                             self.gamma ** self.n)
+                             self.gamma ** self.n, st_0)
             self.pending.pop(0)
 
     def flush_censored(self):
@@ -165,10 +219,10 @@ class NStepWindower:
         windows with a variable-length bootstrap (disc = gamma^m) at the
         last available next state."""
         for i in range(len(self.pending)):
-            s_i, a_i, _ = self.pending[i]
+            s_i, a_i, _, st_i = self.pending[i]
             m = len(self.pending) - i
             self.buffer.push(s_i, a_i, self._window_return(i),
-                             self.last_ns, self.gamma ** m)
+                             self.last_ns, self.gamma ** m, st_i)
         self.pending.clear()
 
 
@@ -240,7 +294,7 @@ class IntervalDQNAgent:
                  hidden=HIDDEN, c_train=0.5, target_coverage=0.85,
                  width_reg=0.01, warmup_steps=1000, warmup_epsilon=0.5,
                  buffer_size=BUFFER_SIZE, batch_size=BATCH_SIZE,
-                 device="cpu"):
+                 device="cpu", strat_t=False):
         self.state_dim = state_dim
         self.n_actions = n_actions
         self.gamma = gamma
@@ -261,6 +315,22 @@ class IntervalDQNAgent:
         # by bootstrapped Bellman targets. Bootstrap coverage is kept as a
         # logging-only comparison metric.
         self.coverage_tracker = CoverageTracker(target=target_coverage)
+        # Stratified-t (opt-in, --strat_t): a bank of trackers, one per risk
+        # stratum (nearest-neighbour distance bucket, see state_stratum).
+        # Each stratum's t is driven only by realized returns of states in
+        # that stratum, so high-risk states can keep a high t (coverage
+        # pressure) while empty-sky states relax toward narrow intervals.
+        # When off, self.trackers aliases the single tracker and every
+        # stored stratum id is 0 — behavior is identical to the unstratified
+        # scheme.
+        self.strat_t = strat_t
+        if strat_t:
+            self.trackers = [CoverageTracker(target=target_coverage)
+                             for _ in range(N_STRATA)]
+            self.stratum_fn = state_stratum
+        else:
+            self.trackers = [self.coverage_tracker]
+            self.stratum_fn = None
         self.bootstrap_hits = deque(maxlen=2000)
         self.realized_streams = 0
         self.censored_streams = 0
@@ -273,11 +343,19 @@ class IntervalDQNAgent:
     # convenience passthroughs
     @property
     def t(self):
+        if self.strat_t:
+            # headline scalar: mean per-stratum t (per-stratum values are
+            # logged separately)
+            return float(np.mean([tr.t for tr in self.trackers]))
         return self.coverage_tracker.t
 
     @property
     def coverage(self):
-        """Realized coverage (drives t)."""
+        """Realized coverage (drives t). Pooled across strata when
+        --strat_t is on."""
+        if self.strat_t:
+            n = sum(len(tr.hits) for tr in self.trackers)
+            return sum(sum(tr.hits) for tr in self.trackers) / max(1, n)
         return self.coverage_tracker.coverage
 
     @property
@@ -309,7 +387,12 @@ class IntervalDQNAgent:
             u_a = upper.gather(1, a.unsqueeze(1)).squeeze(1).cpu().numpy()
         g = np.asarray(returns, dtype=np.float32)
         hits = ((g >= l_a) & (g <= u_a)).astype(np.float32)
-        self.coverage_tracker.record(hits.tolist())
+        if self.strat_t:
+            # bucket each (s, a, G) hit into its state's stratum tracker
+            for s_k, hit in zip(states, hits):
+                self.trackers[self.stratum_fn(s_k)].record([float(hit)])
+        else:
+            self.coverage_tracker.record(hits.tolist())
         self.realized_streams += 1
 
     def _epsilon(self, force_epsilon=None):
@@ -388,7 +471,17 @@ class IntervalDQNAgent:
                 actions[cs] = int(greedy[i])
         return actions, mean_width
 
-    def interval_loss_sampled(self, lower, upper, target_lower, target_upper):
+    def interval_loss_sampled(self, lower, upper, target_lower, target_upper,
+                              t_vec=None, width_mask=None):
+        """Interval loss over N sampled Bellman targets.
+
+        t_vec: optional per-sample t tensor (shape [B]) for stratified
+        coverage control; None -> the single tracker's scalar t (the
+        original behavior, bit-identical).
+        width_mask: optional per-sample 0/1 tensor gating the width
+        regularizer (stratified: active only for samples whose stratum
+        coverage exceeds its target); None -> the original global gate.
+        """
         N = self.N_TARGET_SAMPLES
         batch_size = lower.shape[0]
 
@@ -405,7 +498,8 @@ class IntervalDQNAgent:
         self.bootstrap_hits.extend(
             inside_mid.detach().cpu().numpy().astype(np.float32).tolist())
 
-        t = self.coverage_tracker.t
+        # scalar t (flag off) or per-sample tensor (broadcasts elementwise)
+        t = self.coverage_tracker.t if t_vec is None else t_vec
         total_loss = torch.zeros(batch_size, device=lower.device)
         for i in range(N):
             t_i = targets[i]
@@ -423,7 +517,12 @@ class IntervalDQNAgent:
         total_loss /= N
 
         # Width regularization when coverage exceeds target
-        if self.coverage_tracker.coverage > self.coverage_tracker.target:
+        if width_mask is not None:
+            # per-sample gate (stratified): only samples whose stratum has
+            # adequate coverage pay the width penalty
+            width = upper - lower
+            total_loss = total_loss + self.width_reg * width ** 2 * width_mask
+        elif self.coverage_tracker.coverage > self.coverage_tracker.target:
             width = upper - lower
             total_loss = total_loss + self.width_reg * width ** 2
 
@@ -433,8 +532,13 @@ class IntervalDQNAgent:
         if len(self.buffer) < self.batch_size:
             return 0.0
 
-        states, actions, rewards, next_states, discs = self.buffer.sample(
-            self.batch_size)
+        if self.strat_t:
+            (states, actions, rewards, next_states, discs,
+             strata) = self.buffer.sample(self.batch_size, with_strata=True)
+        else:
+            states, actions, rewards, next_states, discs = self.buffer.sample(
+                self.batch_size)
+            strata = None
         states = torch.FloatTensor(states).to(self.device)
         actions = torch.LongTensor(actions).to(self.device)
         rewards = torch.FloatTensor(rewards).to(self.device)
@@ -461,7 +565,20 @@ class IntervalDQNAgent:
             target_l = rewards + discs * tgt_lower
             target_u = rewards + discs * tgt_upper
 
-        loss = self.interval_loss_sampled(lower_a, upper_a, target_l, target_u)
+        if self.strat_t:
+            # per-sample t and width gate from each sample's stratum tracker
+            t_vec = torch.FloatTensor(
+                [self.trackers[si].t for si in strata]).to(self.device)
+            width_mask = torch.FloatTensor(
+                [1.0 if (self.trackers[si].coverage > self.trackers[si].target)
+                 else 0.0 for si in strata]).to(self.device)
+            loss = self.interval_loss_sampled(lower_a, upper_a,
+                                              target_l, target_u,
+                                              t_vec=t_vec,
+                                              width_mask=width_mask)
+        else:
+            loss = self.interval_loss_sampled(lower_a, upper_a,
+                                              target_l, target_u)
         if not torch.isfinite(loss):
             # skip the update rather than corrupt weights on a bad batch
             self.optimizer.zero_grad()
@@ -476,8 +593,10 @@ class IntervalDQNAgent:
         if self.step_count % TARGET_UPDATE_FREQ == 0:
             self.target_net.load_state_dict(self.q_net.state_dict())
 
-        # Adaptive t
-        self.coverage_tracker.update_t()
+        # Adaptive t (self.trackers is [coverage_tracker] when flag off,
+        # so this is the same single update as before)
+        for tr in self.trackers:
+            tr.update_t()
 
         return loss.item()
 
@@ -765,8 +884,9 @@ def run_episode(env, agent, seed, train=True, c=None, violation_penalty=10.0,
                         r += progress_coeff * (agent.gamma * phi_next - phi)
                 s32 = np.asarray(s, dtype=np.float32)
                 if cs not in windowers:
-                    windowers[cs] = NStepWindower(agent.buffer, agent.gamma,
-                                                  nstep)
+                    windowers[cs] = NStepWindower(
+                        agent.buffer, agent.gamma, nstep,
+                        strat_fn=getattr(agent, "stratum_fn", None))
                 windowers[cs].add(s32, a, r, ns, terminal)
                 n_transitions += 1
 
@@ -831,7 +951,8 @@ def ckpt_extra(args):
             "centreline_coeff": args.centreline_coeff,
             "violation_penalty": args.violation_penalty,
             "progress_coeff": args.progress_coeff,
-            "nstep": args.nstep}
+            "nstep": args.nstep,
+            "strat_t": bool(getattr(args, "strat_t", False))}
 
 
 def save_checkpoint(agent, path, episode, extra=None):
@@ -845,6 +966,9 @@ def save_checkpoint(agent, path, episode, extra=None):
         "coverage": agent.coverage,
         "episode": episode,
     }
+    if getattr(agent, "strat_t", False):
+        ckpt["strat_t_values"] = [tr.t for tr in agent.trackers]
+        ckpt["strat_coverages"] = [tr.coverage for tr in agent.trackers]
     if extra:
         ckpt.update(extra)
     torch.save(ckpt, path)
@@ -852,12 +976,20 @@ def save_checkpoint(agent, path, episode, extra=None):
 
 def load_agent(path, device="cpu", **kwargs):
     ckpt = torch.load(path, map_location="cpu", weights_only=False)
+    kwargs.setdefault("strat_t", bool(ckpt.get("strat_t", False)))
     agent = IntervalDQNAgent(
         state_dim=ckpt["state_dim"], n_actions=ckpt["n_actions"],
         c_train=ckpt.get("c_train", 0.5), device=device, **kwargs)
     agent.q_net.load_state_dict(ckpt["q_net"])
     agent.target_net.load_state_dict(ckpt["q_net"])
     agent.coverage_tracker.t = ckpt.get("t", 0.5)
+    if agent.strat_t:
+        for tr, tv in zip(agent.trackers, ckpt.get("strat_t_values", [])):
+            tr.t = tv
+    # restore the training gamma: silently wrong for resume-training or any
+    # realized-return computation via agent.gamma otherwise (run 7 = 0.97,
+    # module default = 0.99)
+    agent.gamma = ckpt.get("gamma", agent.gamma)
     agent.total_env_steps = 10 ** 9  # past warmup: no epsilon at eval
     agent.q_net.eval()
     return agent, ckpt
@@ -896,12 +1028,28 @@ def run_training(args, smoke=False):
 
     device = resolve_device(args.device, state_dim, n_actions)
 
+    strat_t = bool(getattr(args, "strat_t", False))
+    if strat_t:
+        # the stratum function reads the relative encoder's neighbour blocks
+        if args.encoder != "relative":
+            raise SystemExit("--strat_t requires --encoder relative "
+                             f"(got {args.encoder!r})")
+        if (state_dim - REL_BASE_AND_FIX) % REL_NEIGH_FEATS != 0:
+            raise SystemExit(f"--strat_t: obs dim {state_dim} does not match "
+                             "the relative-encoder layout (20 base + 7 fix "
+                             "+ 9 per neighbour)")
+        print(f"Stratified-t ON: {N_STRATA} strata by nearest-neighbour "
+              f"distance (<{STRAT_BOUNDS_NM[0]:.0f} NM, "
+              f"{STRAT_BOUNDS_NM[0]:.0f}-{STRAT_BOUNDS_NM[1]:.0f} NM, "
+              f">{STRAT_BOUNDS_NM[1]:.0f} NM/none)")
+
     agent = IntervalDQNAgent(
         state_dim=state_dim, n_actions=n_actions, lr=args.lr,
         gamma=args.gamma, c_train=args.c_train,
         target_coverage=args.target_coverage, width_reg=args.width_reg,
         warmup_steps=args.warmup_steps, warmup_epsilon=args.warmup_epsilon,
-        buffer_size=args.buffer, batch_size=args.batch, device=device)
+        buffer_size=args.buffer, batch_size=args.batch, device=device,
+        strat_t=strat_t)
 
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     prefix = "smoke" if smoke else "train"
@@ -915,7 +1063,15 @@ def run_training(args, smoke=False):
 
     total_steps = 0
     t_start = time.time()
+    lr_decay_ep = int(getattr(args, "lr_decay_ep", 0) or 0)
     for ep in range(episodes):
+        if lr_decay_ep and ep == lr_decay_ep:
+            # single step-decay damper against late-run value churn
+            # (run-7 forensics: mid-run TTV dip = replay-recency churn)
+            for g in agent.optimizer.param_groups:
+                g["lr"] *= 0.3
+            print(f"    [lr decay] episode {ep}: lr -> "
+                  f"{agent.optimizer.param_groups[0]['lr']:.2e}")
         ep_seed = args.seed + ep
         t0 = time.time()
         stats = run_episode(env, agent, seed=ep_seed, train=True,
@@ -942,6 +1098,12 @@ def run_training(args, smoke=False):
             "steps_per_sec": round(stats["steps"] / max(1e-9, wall), 2),
             "wall_time_s": round(wall, 2),
         }
+        if strat_t:
+            # stable keys: per-stratum realized coverage, t, and sample count
+            record["strat_coverage"] = [round(tr.coverage, 4)
+                                        for tr in agent.trackers]
+            record["strat_t"] = [round(tr.t, 4) for tr in agent.trackers]
+            record["strat_hits"] = [len(tr.hits) for tr in agent.trackers]
         log_file.write(json.dumps(record) + "\n")
         log_file.flush()
 
@@ -1093,14 +1255,14 @@ class _ListBuffer:
     def __init__(self):
         self.items = []
 
-    def push(self, s, a, r, ns, disc):
-        self.items.append((s, a, r, ns, disc))
+    def push(self, s, a, r, ns, disc, stratum=0):
+        self.items.append((s, a, r, ns, disc, stratum))
 
 
 def _assert_windows(items, expected, label):
     assert len(items) == len(expected), (
         f"{label}: {len(items)} windows, expected {len(expected)}")
-    for i, ((s, a, r, ns, disc),
+    for i, ((s, a, r, ns, disc, _st),
             (es, ea, er, ens, edisc)) in enumerate(zip(items, expected)):
         assert s is es, f"{label} window {i}: state is not the same object"
         assert a == ea, f"{label} window {i}: action {a} != {ea}"
@@ -1207,8 +1369,9 @@ def _selftest_n1_equivalence(seed=123):
         f"{len(produced)} windows vs {len(raws)} transitions")
     n_term = 0
     for i, ((s, a, r, ns, term),
-            (ps, pa, pr, pns, pdisc)) in enumerate(zip(raws, produced)):
+            (ps, pa, pr, pns, pdisc, pst)) in enumerate(zip(raws, produced)):
         assert ps is s, f"transition {i}: state is not the same object"
+        assert pst == 0, f"transition {i}: stratum must be 0 with flag off"
         assert pa == a and abs(pr - r) < 1e-9, f"transition {i}: (a, r)"
         if term:
             n_term += 1
@@ -1223,11 +1386,101 @@ def _selftest_n1_equivalence(seed=123):
           f"{stats['steps']} env steps — new pipeline == old 1-step scheme")
 
 
+def _make_strat_state(dists_flags, dim=54):
+    """Relative-encoder-shaped vector with the given neighbour
+    (distance_nm, flag) pairs; remaining blocks stay zero-padded."""
+    s = np.zeros(dim, dtype=np.float32)
+    for i, (d, f) in enumerate(dists_flags):
+        base = REL_BASE_AND_FIX + i * REL_NEIGH_FEATS
+        s[base + REL_NEIGH_DIST] = d / REL_DIST_SCALE
+        s[base + REL_NEIGH_FLAG] = f
+    return s
+
+
+def _selftest_stratified_t(seed=321):
+    """Stratified-t unit test: stratum function on crafted vectors, stratum
+    ids recorded through the windower, and per-stratum t divergence —
+    synthetic realized streams with dispersed targets in stratum 0 (mostly
+    outside the net's intervals -> t rises) vs on-midpoint targets in
+    stratum 2 (inside -> t falls), stratum 1 untouched (t unchanged)."""
+    print("[selftest] stratified-t: stratum fn, bucketing, t divergence")
+
+    # 1. stratum function (padding, boundaries, unsorted blocks)
+    cases = [
+        ([(5.0, 1.0)], 0),
+        ([(40.0, 1.0), (8.0, -1.0)], 0),   # min over unsorted blocks
+        ([(20.0, -1.0)], 1),
+        # boundaries (exact 10/30 NM are fp32-fuzzy after the /50 round-trip,
+        # so probe just inside each edge)
+        ([(10.5, 1.0)], 1),
+        ([(29.5, 1.0)], 1),
+        ([(9.5, 1.0)], 0),
+        ([(30.5, 1.0)], 2),
+        ([], 2),                           # no neighbour at all
+        ([(100.0, 1.0)], 2),
+        ([(5.0, 0.0)], 2),                 # flag 0 = padding: dist ignored
+    ]
+    for spec, want in cases:
+        got = state_stratum(_make_strat_state(spec))
+        assert got == want, f"state_stratum({spec}) = {got}, want {want}"
+    print(f"  OK  state_stratum: {len(cases)} crafted vectors")
+
+    # 2. windower stores the window STATE's stratum at push time
+    buf = _ListBuffer()
+    w = NStepWindower(buf, 0.9, 2, strat_fn=state_stratum)
+    sts = [_make_strat_state([(5.0, 1.0)]),
+           _make_strat_state([(20.0, 1.0)]),
+           _make_strat_state([])]
+    z = np.zeros(54, dtype=np.float32)
+    w.add(sts[0], 0, 1.0, sts[1], False)
+    w.add(sts[1], 1, 1.0, sts[2], False)   # completes window 0
+    w.add(sts[2], 2, 1.0, z, True)         # terminal: flushes windows 1, 2
+    got = [item[5] for item in buf.items]
+    assert got == [0, 1, 2], f"windower strata {got} != [0, 1, 2]"
+    print("  OK  windower: per-window stratum ids recorded at push time")
+
+    # 3. bucketing via record_realized_stream + t divergence
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    agent = IntervalDQNAgent(54, 4, device="cpu", strat_t=True)
+    s0 = _make_strat_state([(5.0, 1.0)])
+    s2 = _make_strat_state([])
+    with torch.no_grad():
+        l0, u0 = agent.q_net(torch.from_numpy(s0).unsqueeze(0))
+        l2, u2 = agent.q_net(torch.from_numpy(s2).unsqueeze(0))
+    mid2 = float((l2[0, 0] + u2[0, 0]) / 2)
+    for k in range(300):
+        # stratum 0: dispersed targets, always outside the interval
+        g0 = (float(u0[0, 0]) + 50.0 + k if k % 2 == 0
+              else float(l0[0, 0]) - 50.0 - k)
+        agent.record_realized_stream([s0], [0], [g0])
+        # stratum 2: target dead-centre, always inside
+        agent.record_realized_stream([s2], [0], [mid2])
+    assert len(agent.trackers[0].hits) == 300, "stratum-0 bucketing"
+    assert len(agent.trackers[2].hits) == 300, "stratum-2 bucketing"
+    assert len(agent.trackers[1].hits) == 0, "stratum 1 must stay empty"
+    t_before = [tr.t for tr in agent.trackers]
+    for _ in range(100):
+        for tr in agent.trackers:
+            tr.update_t()
+    t_after = [tr.t for tr in agent.trackers]
+    assert t_after[0] > t_before[0], "low-coverage stratum: t must rise"
+    assert t_after[2] < t_before[2], "high-coverage stratum: t must fall"
+    assert abs(t_after[1] - t_before[1]) < 1e-12, "empty stratum: t frozen"
+    assert t_after[0] > t_after[1] > t_after[2], "t ordering"
+    print(f"  OK  t divergence after 100 updates: "
+          f"t={[round(t, 4) for t in t_after]} "
+          f"cov={[round(tr.coverage, 2) for tr in agent.trackers]} "
+          f"n={[len(tr.hits) for tr in agent.trackers]}")
+
+
 def run_selftest():
     print("=" * 100)
-    print("N-STEP WINDOW SEMANTICS SELF-TESTS")
+    print("N-STEP WINDOW + STRATIFIED-T SELF-TESTS")
     print("=" * 100)
     _selftest_synthetic_windows()
+    _selftest_stratified_t()
     _selftest_n1_equivalence()
     print("SELFTEST PASSED")
 
@@ -1275,6 +1528,9 @@ if __name__ == "__main__":
     parser.add_argument("--c_eval", type=float, nargs="+",
                         default=[0.0, 0.2, 0.5, 1.0])
     parser.add_argument("--lr", type=float, default=LR)
+    parser.add_argument("--lr_decay_ep", type=int, default=0,
+                        help="episode at which to step lr down x0.3 once "
+                             "(0 disables)")
     parser.add_argument("--gamma", type=float, default=GAMMA)
     parser.add_argument("--batch", type=int, default=BATCH_SIZE)
     parser.add_argument("--buffer", type=int, default=BUFFER_SIZE)
@@ -1303,6 +1559,13 @@ if __name__ == "__main__":
     parser.add_argument("--nstep", type=int, default=6,
                         help="n-step interval Bellman window length "
                              "(1 reproduces the old 1-step targets)")
+    parser.add_argument("--strat_t", action="store_true",
+                        help="stratified coverage control: one CoverageTracker"
+                             " per risk stratum (nearest-neighbour distance "
+                             "<10 / 10-30 / >30 NM-or-none from the relative "
+                             "encoder), per-sample t in the interval loss. "
+                             "OFF by default; off = bit-identical to the "
+                             "unstratified scheme")
     # bookkeeping
     parser.add_argument("--ckpt", type=str, default=None,
                         help="Checkpoint path for --eval")

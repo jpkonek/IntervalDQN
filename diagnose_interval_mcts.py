@@ -19,8 +19,9 @@ Checks
      lower <= mean <= upper on every node, visit-count flow conservation
      (parent visits == sum(child visits) + sims terminating at parent),
      sum(root child visits) == n_simulations.
-  3  EXPANSION                          root expands all 3 actions within the
-     first 3 sims (root is PW-exempt); every internal tree step obeys the
+  3  EXPANSION                          root expands all actions within the
+     first len(actions) sims (root is PW-exempt; the action set is derived
+     at runtime from the env); every internal tree step obeys the
      progressive-widening gate cap = max(1, floor(k * N^alpha)); no root
      action starved (< 2 visits) at 24 sims.
   4  SELECTION SANITY                   unit tests on synthetic IntervalNode
@@ -69,7 +70,7 @@ import numpy as np
 
 import bluebird_interval_mcts as M
 from bluebird_interval_mcts import (
-    ALL_ACTIONS, LEFT_10, NOOP, RIGHT_10,
+    NOOP,
     IntervalMCTSAgent, IntervalNode,
     find_violations, make_env, violation_involving, _status,
 )
@@ -77,8 +78,29 @@ from bluebird_interval_mcts import (
 REPO = Path(__file__).resolve().parent
 OUT_DIR = REPO / "checkpoints" / "bluebird" / "diagnostics"
 
-ACTION_NAMES = {NOOP: "NOOP", LEFT_10: "LEFT", RIGHT_10: "RIGHT"}
+# Action set: derived at runtime from the make_env() default config via
+# derive_action_space (index order depends on action_config — with macro
+# turns ON the map is 0=NOOP 1=LEFT_10 2=LEFT_30 3=RIGHT_10 4=RIGHT_30).
+# The legacy module constants below are placeholders until _bind_action_space
+# runs at main() start; only NOOP=0 is layout-invariant.
+ALL_ACTIONS = M.ALL_ACTIONS
+LEFT_10, RIGHT_10 = M.LEFT_10, M.RIGHT_10
+ACTION_NAMES = dict(M.DEFAULT_ACTION_NAMES)
 TOL = 1e-9
+
+
+def _bind_action_space():
+    """Derive ALL_ACTIONS / ACTION_NAMES / LEFT_10 / RIGHT_10 from a probe
+    env built with the production make_env() defaults, so every check tracks
+    the agent's actual (dynamic) action set."""
+    global ALL_ACTIONS, LEFT_10, RIGHT_10, ACTION_NAMES
+    env = make_env()
+    ALL_ACTIONS, ACTION_NAMES = M.derive_action_space(env)
+    by_name = {v: k for k, v in ACTION_NAMES.items()}
+    LEFT_10 = by_name.get("LEFT_10", LEFT_10)
+    RIGHT_10 = by_name.get("RIGHT_10", RIGHT_10)
+    print(f"action space (derived from make_env defaults): "
+          + ", ".join(f"{a}={ACTION_NAMES[a]}" for a in ALL_ACTIONS))
 
 # ============================================================================
 # Reporting plumbing
@@ -289,8 +311,10 @@ def run_instrumented_search(agent, live_env, obs, planned_cs, frozen=None):
 
 
 def riskiest_callsign(agent, obs, info):
-    """Replicate generate_action's risk ordering; return the riskiest
-    aircraft (smallest min-separation to a vertically-close neighbour)."""
+    """Pick a search target by min-separation to a vertically-close
+    neighbour (generate_action's DISTANCE-fallback ordering; since the TTC
+    upgrade the primary ordering is ascending time-to-CPA — for these checks
+    any consistently-chosen aircraft works)."""
     callsigns = list(obs.keys())
     states = M.aircraft_states(info, callsigns)
     risk = {}
@@ -502,10 +526,11 @@ def check2():
 
 def check3():
     section(3, "EXPANSION: root PW exemption, internal PW schedule, starvation")
+    n_act = len(ALL_ACTIONS)
     print("Method: instrumented run (24 sims, horizon 6), then REPLAY the\n"
           "recorded tree paths through a shadow tree, checking at every tree\n"
           "step that an expansion happened IFF the PW gate allowed one:\n"
-          "  root:      cap = 3 (exempt);\n"
+          f"  root:      cap = {n_act} (exempt);\n"
           "  internal:  cap = max(1, floor(pw_k * max(1,N)^pw_alpha)), N = the\n"
           "             node's visit count at selection time (pre-backup).")
 
@@ -563,11 +588,11 @@ def check3():
         print("    " + line)
         evidence.append(line)
 
-    print(f"\n  Root children after sims 1/2/3: "
-          f"{root_children_by_sim[:3]} (expect [1, 2, 3])")
-    if root_children_by_sim[:3] != [1, 2, 3]:
-        failures.append(f"root did NOT expand all {len(ALL_ACTIONS)} actions in "
-                        f"the first 3 sims: {root_children_by_sim[:3]}")
+    print(f"\n  Root children after sims 1..{n_act}: "
+          f"{root_children_by_sim[:n_act]} (expect {list(range(1, n_act + 1))})")
+    if root_children_by_sim[:n_act] != list(range(1, n_act + 1)):
+        failures.append(f"root did NOT expand all {n_act} actions in "
+                        f"the first {n_act} sims: {root_children_by_sim[:n_act]}")
 
     print("  Root child visits at 24 sims (starvation check, need >= 2 each):")
     for a in ALL_ACTIONS:
@@ -1157,6 +1182,7 @@ def main():
         print(f"python : {sys.executable}")
         print(f"date   : {datetime.now().isoformat(timespec='seconds')}")
         print(f"niceness: {os.nice(0)}")
+        _bind_action_space()
         print("\nLINEAGE NOTE (semantic drift vs IP-ML/nim_interval_mcts.py, "
               "reported as a\nfinding, not a bug): the ancestor backs up "
               "RUNNING MEANS of network-predicted\ninterval bounds "
