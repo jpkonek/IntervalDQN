@@ -133,16 +133,50 @@ class ReplayBuffer:
     discount factor: gamma^m for an m-step bootstrapped window, 0.0 for a
     window that reached a terminal (the target IS the realized return)."""
 
-    def __init__(self, capacity=BUFFER_SIZE):
-        self.buffer = deque(maxlen=capacity)
+    def __init__(self, capacity=BUFFER_SIZE, terminal_boost=1.0):
+        # terminal_boost > 1 splits storage into a terminal pool (disc == 0,
+        # realized-G targets) and a regular pool, and oversamples the
+        # terminal pool by ~boost in sample(). Motivation (run-8 forensics):
+        # realized outcomes are a few percent of windows, so the coverage
+        # pressure toward reality is population-diluted; boosting the
+        # realized minority restores its gradient share. boost == 1.0
+        # preserves the original single-deque behavior exactly.
+        self.terminal_boost = float(terminal_boost)
+        if self.terminal_boost > 1.0:
+            # terminal pool gets a protected slice of capacity (also gives
+            # rare realized samples longer retention)
+            term_cap = max(1000, capacity // 5)
+            self.term_buf = deque(maxlen=term_cap)
+            self.reg_buf = deque(maxlen=capacity - term_cap)
+            self.buffer = None
+        else:
+            self.buffer = deque(maxlen=capacity)
 
     def push(self, state, action, reward, next_state, disc, stratum=0):
         # stratum: small int risk-stratum id recorded at push time
         # (always 0 when --strat_t is off)
-        self.buffer.append((state, action, reward, next_state, disc, stratum))
+        item = (state, action, reward, next_state, disc, stratum)
+        if self.buffer is not None:
+            self.buffer.append(item)
+        elif disc == 0.0:
+            self.term_buf.append(item)
+        else:
+            self.reg_buf.append(item)
 
     def sample(self, batch_size, with_strata=False):
-        batch = random.sample(self.buffer, batch_size)
+        if self.buffer is not None:
+            batch = random.sample(self.buffer, batch_size)
+        else:
+            n_term, n_reg = len(self.term_buf), len(self.reg_buf)
+            share = n_term / max(1, n_term + n_reg)
+            target = min(0.5, self.terminal_boost * share)
+            k_t = min(n_term, int(round(batch_size * target)))
+            k_r = batch_size - k_t
+            if k_r > n_reg:  # early training: not enough regular samples
+                k_r = n_reg
+                k_t = min(n_term, batch_size - k_r)
+            batch = (random.sample(self.term_buf, k_t) +
+                     random.sample(self.reg_buf, k_r))
         states, actions, rewards, next_states, discs, strata = zip(*batch)
         out = (np.array(states), np.array(actions),
                np.array(rewards, dtype=np.float32),
@@ -152,7 +186,9 @@ class ReplayBuffer:
         return out
 
     def __len__(self):
-        return len(self.buffer)
+        if self.buffer is not None:
+            return len(self.buffer)
+        return len(self.term_buf) + len(self.reg_buf)
 
 
 class NStepWindower:
@@ -236,9 +272,14 @@ class CoverageTracker:
     coverage below target -> raise t (penalize misses), above -> lower t
     (allow narrower intervals)."""
 
-    def __init__(self, target=0.85, t_init=0.5, window=2000, min_samples=200):
+    def __init__(self, target=0.85, t_init=0.5, window=2000, min_samples=200,
+                 t_max=0.95):
         self.target = target
         self.t = t_init
+        # per-tracker cap: with stratified t, the failing (risky) stratum
+        # may run a higher cap (e.g. 0.99) to weaken the width-shrink term
+        # exactly where coverage fails, without loosening it elsewhere
+        self.t_max = t_max
         self.hits = deque(maxlen=window)
         self.min_samples = min_samples
 
@@ -252,7 +293,7 @@ class CoverageTracker:
     def update_t(self):
         if len(self.hits) >= self.min_samples:
             if self.coverage < self.target:
-                self.t = min(0.95, self.t + 0.001)
+                self.t = min(self.t_max, self.t + 0.001)
             else:
                 self.t = max(0.05, self.t - 0.0005)
 
@@ -294,7 +335,8 @@ class IntervalDQNAgent:
                  hidden=HIDDEN, c_train=0.5, target_coverage=0.85,
                  width_reg=0.01, warmup_steps=1000, warmup_epsilon=0.5,
                  buffer_size=BUFFER_SIZE, batch_size=BATCH_SIZE,
-                 device="cpu", strat_t=False):
+                 device="cpu", strat_t=False, t_cap_risky=0.99,
+                 terminal_boost=1.0):
         self.state_dim = state_dim
         self.n_actions = n_actions
         self.gamma = gamma
@@ -308,7 +350,7 @@ class IntervalDQNAgent:
         self.target_net = IntervalQNetwork(state_dim, n_actions, hidden).to(self.device)
         self.target_net.load_state_dict(self.q_net.state_dict())
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=lr)
-        self.buffer = ReplayBuffer(buffer_size)
+        self.buffer = ReplayBuffer(buffer_size, terminal_boost=terminal_boost)
 
         # Adaptive coverage — the tracker (and hence t) is driven by REALIZED
         # returns of finished aircraft streams (record_realized_stream), not
@@ -325,8 +367,12 @@ class IntervalDQNAgent:
         # scheme.
         self.strat_t = strat_t
         if strat_t:
-            self.trackers = [CoverageTracker(target=target_coverage)
-                             for _ in range(N_STRATA)]
+            # stratum 0 (<10nm, the failing stratum in every measurement)
+            # runs a raised cap; safe strata keep the standard 0.95
+            self.trackers = [
+                CoverageTracker(target=target_coverage,
+                                t_max=(t_cap_risky if s == 0 else 0.95))
+                for s in range(N_STRATA)]
             self.stratum_fn = state_stratum
         else:
             self.trackers = [self.coverage_tracker]
@@ -952,7 +998,9 @@ def ckpt_extra(args):
             "violation_penalty": args.violation_penalty,
             "progress_coeff": args.progress_coeff,
             "nstep": args.nstep,
-            "strat_t": bool(getattr(args, "strat_t", False))}
+            "strat_t": bool(getattr(args, "strat_t", False)),
+            "t_cap_risky": float(getattr(args, "t_cap_risky", 0.99)),
+            "terminal_boost": float(getattr(args, "terminal_boost", 1.0))}
 
 
 def save_checkpoint(agent, path, episode, extra=None):
@@ -1049,7 +1097,8 @@ def run_training(args, smoke=False):
         target_coverage=args.target_coverage, width_reg=args.width_reg,
         warmup_steps=args.warmup_steps, warmup_epsilon=args.warmup_epsilon,
         buffer_size=args.buffer, batch_size=args.batch, device=device,
-        strat_t=strat_t)
+        strat_t=strat_t, t_cap_risky=args.t_cap_risky,
+        terminal_boost=args.terminal_boost)
 
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
     prefix = "smoke" if smoke else "train"
@@ -1559,6 +1608,14 @@ if __name__ == "__main__":
     parser.add_argument("--nstep", type=int, default=6,
                         help="n-step interval Bellman window length "
                              "(1 reproduces the old 1-step targets)")
+    parser.add_argument("--terminal_boost", type=float, default=1.0,
+                        help="oversample realized-G (terminal) replay windows "
+                             "by this factor so real outcomes get gradient "
+                             "share (run-8 forensics: they are ~4%% of "
+                             "windows); 1.0 = off, run-9 recipe uses 3.0")
+    parser.add_argument("--t_cap_risky", type=float, default=0.99,
+                        help="t cap for the risky (<10nm) stratum when "
+                             "--strat_t is on; other strata keep 0.95")
     parser.add_argument("--strat_t", action="store_true",
                         help="stratified coverage control: one CoverageTracker"
                              " per risk stratum (nearest-neighbour distance "
