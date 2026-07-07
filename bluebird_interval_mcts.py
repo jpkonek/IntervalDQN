@@ -170,7 +170,9 @@ def make_env(scenario_duration: int = 600,
              centreline_coeff: float = 0.2,
              encoder_cls: str = "extra_minimal",
              k_nearest: int = 2,
-             macro_turns: bool = True) -> InfiniteEnv:
+             macro_turns: bool = True,
+             action_penalty_coeff: float = 0.0,
+             expeditious_coeff: float = 0.0) -> InfiniteEnv:
     """Build the target BluebirdATC environment (verified configuration).
 
     centreline_coeff 0.2 matches bluebird_interval_dqn's outcome-anchored
@@ -207,6 +209,18 @@ def make_env(scenario_duration: int = 600,
         ],
         "coeffs": [1.0, centreline_coeff, 1.2],
     }
+    if action_penalty_coeff:
+        # instruction-discipline cost, mirroring bluebird_interval_dqn:
+        # hybrid mode must rehearse in the leaf checkpoint's reward regime
+        cfg.reward_config["fns"].append("action_penalty_const")
+        cfg.reward_config["coeffs"].append(action_penalty_coeff)
+    if expeditious_coeff:
+        # delay pressure (bug-fixed expeditious_const), same regime rule;
+        # registration lives in bluebird_interval_dqn (single source)
+        from bluebird_interval_dqn import _register_expeditious_const_fixed
+        _register_expeditious_const_fixed()
+        cfg.reward_config["fns"].append("expeditious_const_fixed")
+        cfg.reward_config["coeffs"].append(expeditious_coeff)
     cfg.scenario_config["scenario_name"] = ScenarioName.sector_xplus
     cfg.view_config["type"] = "decentralized"
     cfg.view_config["decentralized_params"] = {}
@@ -942,6 +956,7 @@ def run_episode(
     encoder_cls: str = "extra_minimal",
     k_nearest: int = 2,
     macro_turns: bool = True,
+    action_penalty_coeff: float = 0.0,
 ) -> dict:
     """Run one full episode; agent=None means the all-NOOP baseline.
 
@@ -953,7 +968,8 @@ def run_episode(
     """
     env = make_env(scenario_duration=scenario_duration,
                    encoder_cls=encoder_cls, k_nearest=k_nearest,
-                   macro_turns=macro_turns)
+                   macro_turns=macro_turns,
+                   action_penalty_coeff=action_penalty_coeff)
     obs, info = env.reset(seed=seed)
     if agent is not None:
         agent.reset_episode()   # clear maneuver tracking (agent may be reused)
@@ -1179,15 +1195,17 @@ def main() -> None:
     # MUST be built with the encoder the checkpoint was trained on
     # (DESIGN_REVISIONS item 5). Model-free mode keeps the historic default.
     encoder_cls, k_nearest = "extra_minimal", 2
+    action_penalty_coeff = 0.0
     if args.leaf_value is not None:
         import torch  # local import — torch optional in model-free mode
         ckpt_meta = torch.load(args.leaf_value, map_location="cpu",
                                weights_only=False)
         encoder_cls = ckpt_meta.get("encoder_cls", "extra_minimal")
         k_nearest = ckpt_meta.get("k", 2)
+        action_penalty_coeff = ckpt_meta.get("action_penalty_coeff", 0.0)
         print(f"[leaf-value] env reconstructed from checkpoint metadata: "
-              f"encoder_cls={encoder_cls}, k_nearest={k_nearest} "
-              f"({args.leaf_value})")
+              f"encoder_cls={encoder_cls}, k_nearest={k_nearest}, "
+              f"action_penalty={action_penalty_coeff} ({args.leaf_value})")
 
     if args.baseline:
         print(f"All-NOOP baseline | seed {args.seed} | duration {args.duration}s")
@@ -1215,7 +1233,8 @@ def main() -> None:
         t0 = time.time()
         stats = run_episode(agent, seed=args.seed, scenario_duration=120,
                             encoder_cls=encoder_cls, k_nearest=k_nearest,
-                            macro_turns=args.macro_turns)
+                            macro_turns=args.macro_turns,
+                            action_penalty_coeff=action_penalty_coeff)
         print(f"\nSmoke episode wall time: {time.time()-t0:.1f} s")
         print_stats("Interval MCTS (smoke)", stats)
 
@@ -1255,7 +1274,8 @@ def main() -> None:
     t0 = time.time()
     stats = run_episode(agent, seed=args.seed, scenario_duration=args.duration,
                         encoder_cls=encoder_cls, k_nearest=k_nearest,
-                        macro_turns=args.macro_turns)
+                        macro_turns=args.macro_turns,
+                        action_penalty_coeff=action_penalty_coeff)
     print(f"\nEpisode wall time: {time.time()-t0:.1f} s")
     print_stats("Interval MCTS", stats)
 

@@ -659,7 +659,8 @@ class IntervalDQNAgent:
 # ============================================================================
 
 def make_env(scenario_duration=600, k_nearest=2, route_parallel=False,
-             centreline_coeff=0.2, encoder_cls="extra_minimal"):
+             centreline_coeff=0.2, encoder_cls="extra_minimal",
+             action_penalty_coeff=0.0, expeditious_coeff=0.0):
     """Build the Flight School InfiniteEnv (X-Plus sector, decentralized).
 
     encoder_cls selects the observation encoder ("extra_minimal" was the
@@ -694,6 +695,27 @@ def make_env(scenario_duration=600, k_nearest=2, route_parallel=False,
                 "safety_simple_avoidance_exp"],
         "coeffs": [1.0, centreline_coeff, 1.2],
     }
+    if action_penalty_coeff:
+        # -1 per non-NOOP command (env's action_penalty_const), scaled.
+        # Instruction discipline: run-8 radar animations showed constant
+        # weaving because maneuvering was essentially free once the
+        # centreline income was (correctly) shrunk — commands themselves
+        # must carry the cost, as they do for real controllers.
+        cfg.reward_config["fns"].append("action_penalty_const")
+        cfg.reward_config["coeffs"].append(action_penalty_coeff)
+    if expeditious_coeff:
+        # bluebird's own delay-pressure primitive: +1 per step an aircraft
+        # got CLOSER to its exit, -1 otherwise. The differential makes
+        # transit earn and holding bleed — the real ATC delay-vs-risk
+        # dilemma. Motivation: the run-8 champion achieved a fully clean
+        # 3600 s episode with ZERO aircraft delivered (immediate universal
+        # holding is optimal under a survive-only objective).
+        # We register a bug-fixed copy: upstream expeditious_const crashes
+        # on newly-tracked aircraft (missing else — reported upstream;
+        # expeditious_linear/quad/exp additionally have a sign bug).
+        _register_expeditious_const_fixed()
+        cfg.reward_config["fns"].append("expeditious_const_fixed")
+        cfg.reward_config["coeffs"].append(expeditious_coeff)
     cfg.scenario_config["scenario_name"] = ScenarioName.sector_xplus
     cfg.view_config["type"] = "decentralized"
     cfg.view_config["decentralized_params"] = {}
@@ -709,6 +731,36 @@ def haversine_nm(lat1, lon1, lat2, lon2):
     a = (math.sin(dphi / 2) ** 2
          + math.cos(phi1) * math.cos(phi2) * math.sin(dlam / 2) ** 2)
     return 2 * EARTH_RADIUS_NM * math.asin(math.sqrt(a))
+
+
+def expeditious_const_fixed(gym_env, callsign, action, **kwargs):
+    """Bug-fixed copy of bluebird_gymnasium.rewards.expeditious_const
+    (0.2.0 dereferences prev state after handling None — missing else,
+    reported upstream). Semantics per their docstring: +1 if the aircraft's
+    along-track distance to exit decreased this step, else -1; 0 on the
+    first tracked step."""
+    ac_tracked = gym_env.get_tracked_aircraft_data(callsign)
+    prev = gym_env.get_tracked_aircraft_data_previous(callsign)
+    if (prev is None or ac_tracked is None
+            or ac_tracked.track_dist_to_exit_cr is None
+            or prev.track_dist_to_exit_cr is None):
+        return 0.0
+    return (1.0 if ac_tracked.track_dist_to_exit_cr
+            < prev.track_dist_to_exit_cr else -1.0)
+
+
+_EXPEDITIOUS_REGISTERED = False
+
+
+def _register_expeditious_const_fixed():
+    global _EXPEDITIOUS_REGISTERED
+    if _EXPEDITIOUS_REGISTERED:
+        return
+    from bluebird_gymnasium.rewards import registry_reward_fn
+    registry_reward_fn.register(
+        "expeditious_const_fixed",
+        f"{__name__}:expeditious_const_fixed")
+    _EXPEDITIOUS_REGISTERED = True
 
 
 def exit_potential(env, cs):
@@ -867,6 +919,7 @@ def run_episode(env, agent, seed, train=True, c=None, violation_penalty=10.0,
     n_transitions = 0
     violated = False
     violation_kind = None
+    n_exits = 0
     # per-aircraft (states, actions, rewards) streams for realized-coverage
     # tracking; resolved on terminal, censored streams are dropped
     streams = {}
@@ -888,6 +941,12 @@ def run_episode(env, agent, seed, train=True, c=None, violation_penalty=10.0,
 
         next_obs, rew, done, trunc, info = env.step(actions)
         violated, violation_kind, involved = detect_violation(info)
+        # throughput: deliveries are now a first-class metric (the run-8
+        # champion flew a clean hour delivering ZERO aircraft)
+        for cs in obs:
+            d_cs = info.get(cs)
+            if isinstance(d_cs, dict) and d_cs.get("pos_status") == "EXIT_REACHED":
+                n_exits += 1
 
         if train:
             for cs, s in obs.items():
@@ -980,6 +1039,7 @@ def run_episode(env, agent, seed, train=True, c=None, violation_penalty=10.0,
         "mean_width": width_sum / max(1, width_n),
         "mean_loss": loss_sum / max(1, loss_n),
         "transitions": n_transitions,
+        "exits": n_exits,
     }
 
 
@@ -1000,7 +1060,9 @@ def ckpt_extra(args):
             "nstep": args.nstep,
             "strat_t": bool(getattr(args, "strat_t", False)),
             "t_cap_risky": float(getattr(args, "t_cap_risky", 0.99)),
-            "terminal_boost": float(getattr(args, "terminal_boost", 1.0))}
+            "terminal_boost": float(getattr(args, "terminal_boost", 1.0)),
+            "action_penalty_coeff": float(getattr(args, "action_penalty", 0.0)),
+            "expeditious_coeff": float(getattr(args, "expeditious", 0.0))}
 
 
 def save_checkpoint(agent, path, episode, extra=None):
@@ -1067,7 +1129,9 @@ def run_training(args, smoke=False):
     env = make_env(scenario_duration=duration, k_nearest=args.k,
                    route_parallel=args.route_parallel,
                    centreline_coeff=args.centreline_coeff,
-                   encoder_cls=args.encoder)
+                   encoder_cls=args.encoder,
+                   action_penalty_coeff=args.action_penalty,
+                   expeditious_coeff=args.expeditious)
     obs, _ = env.reset(seed=args.seed)
     state_dim = int(next(iter(obs.values())).shape[0])
     n_actions = int(env.get_action_parser().get_total_num_actions())
@@ -1277,7 +1341,9 @@ def run_eval_only(args):
     env = make_env(scenario_duration=args.duration, k_nearest=k,
                    route_parallel=route_parallel,
                    centreline_coeff=centreline_coeff,
-                   encoder_cls=encoder_cls)
+                   encoder_cls=encoder_cls,
+                   action_penalty_coeff=ckpt.get("action_penalty_coeff", 0.0),
+                   expeditious_coeff=ckpt.get("expeditious_coeff", 0.0))
 
     # keep eval scenarios disjoint from training episode seeds
     # (training uses seed..seed+episodes-1; +10000 matches the in-training
@@ -1595,6 +1661,15 @@ if __name__ == "__main__":
     parser.add_argument("--exit_bonus", type=float, default=10.0,
                         help="terminal reward for a clean exit (outcome "
                              "anchoring; set 0 to disable)")
+    parser.add_argument("--expeditious", type=float, default=0.0,
+                        help="coeff for bluebird's expeditious_const (+1 per "
+                             "step closer to exit, -1 otherwise): delay "
+                             "pressure so universal holding bleeds; run-11 "
+                             "recipe 0.05")
+    parser.add_argument("--action_penalty", type=float, default=0.0,
+                        help="cost per non-NOOP command (scales the env's "
+                             "action_penalty_const): instruction discipline "
+                             "against reward-free weaving; run-9 recipe 0.1")
     parser.add_argument("--centreline_coeff", type=float, default=0.2,
                         help="weight of the on-route income shaping term "
                              "(run 2 used 1.0; small keeps returns "

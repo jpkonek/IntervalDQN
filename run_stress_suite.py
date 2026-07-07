@@ -194,15 +194,18 @@ class Driver:
     def env_for(self, ckpt, duration):
         key = (duration, ckpt.get("k", 2), ckpt.get("route_parallel", False),
                ckpt.get("centreline_coeff", 1.0),
-               ckpt.get("encoder_cls", "extra_minimal"))
+               ckpt.get("encoder_cls", "extra_minimal"),
+               ckpt.get("action_penalty_coeff", 0.0),
+               ckpt.get("expeditious_coeff", 0.0))
         if key not in self._envs:
             print(f"  creating env (duration={key[0]}s, k={key[1]}, "
                   f"route_parallel={key[2]}, centreline_coeff={key[3]}, "
-                  f"encoder={key[4]})")
+                  f"encoder={key[4]}, action_penalty={key[5]})")
             self._envs[key] = self.bid.make_env(
                 scenario_duration=key[0], k_nearest=key[1],
                 route_parallel=key[2], centreline_coeff=key[3],
-                encoder_cls=key[4])
+                encoder_cls=key[4], action_penalty_coeff=key[5],
+                expeditious_coeff=key[6])
         return self._envs[key]
 
     def close_envs(self):

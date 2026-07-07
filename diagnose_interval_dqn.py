@@ -576,7 +576,10 @@ def check_6(agent, ckpt, n_episodes=3, base_seed=20042, duration=300, c=0.0,
     env = bid.make_env(scenario_duration=duration, k_nearest=ckpt.get("k", 2),
                        route_parallel=route_parallel,
                        centreline_coeff=centreline_coeff,
-                       encoder_cls=ckpt.get("encoder_cls", "extra_minimal"))
+                       encoder_cls=ckpt.get("encoder_cls", "extra_minimal"),
+                       action_penalty_coeff=ckpt.get("action_penalty_coeff",
+                                                     0.0),
+                       expeditious_coeff=ckpt.get("expeditious_coeff", 0.0))
     trajs = []  # per (episode, callsign): dict(steps=[(q_l,q_u,r)], terminal)
     for epi in range(n_episodes):
         obs, info = env.reset(seed=base_seed + epi)
