@@ -153,22 +153,66 @@ class StandardDQNAgent:
 # ============================================================================
 
 class IntervalQNetwork(nn.Module):
-    """Outputs interval [lower, upper] for each action's Q-value."""
-    def __init__(self, state_dim=STATE_DIM, n_actions=N_ACTIONS, hidden=HIDDEN):
+    """Outputs interval [lower, upper] for each action's Q-value.
+
+    width_prior_beta > 0 adds a FROZEN random network's |output| to the
+    width head's pre-activation: the net starts wide EVERYWHERE and the
+    trainable head learns to cancel the prior only where data falls
+    ("start wide, narrow with data" — JK's initialization mechanism,
+    single-net; see WIDTH_MECHANISM_PROBES.md, width-prior arm)."""
+    def __init__(self, state_dim=STATE_DIM, n_actions=N_ACTIONS, hidden=HIDDEN,
+                 width_prior_beta=0.0, width_prior_freq=0.0,
+                 layernorm=False):
         super().__init__()
-        self.shared = nn.Sequential(
-            nn.Linear(state_dim, hidden), nn.ReLU(),
-            nn.Linear(hidden, hidden), nn.ReLU(),
-        )
+        if layernorm:
+            # ATC-controller-style normalized trunk — the LL ablation that
+            # tests whether LN is what kills the novelty elevation there
+            self.shared = nn.Sequential(
+                nn.Linear(state_dim, hidden), nn.LayerNorm(hidden), nn.ReLU(),
+                nn.Linear(hidden, hidden), nn.LayerNorm(hidden), nn.ReLU(),
+            )
+        else:
+            self.shared = nn.Sequential(
+                nn.Linear(state_dim, hidden), nn.ReLU(),
+                nn.Linear(hidden, hidden), nn.ReLU(),
+            )
+        self.layernorm = layernorm
         self.head = nn.Linear(hidden, n_actions * 2)
         self.n_actions = n_actions
+        self.width_prior_beta = width_prior_beta
+        # width_prior_freq > 0: prior sees Fourier features sin/cos(freq*x)
+        # so it varies FASTER than the smooth trainable head — the head can
+        # cancel it where data is dense but cannot track it off-data
+        # (counters the cancellation-generalization failure of the plain
+        # prior, at the risk of imperfect on-data cancellation)
+        self.width_prior_freq = width_prior_freq
+        if width_prior_beta > 0.0:
+            prior_in = 2 * state_dim if width_prior_freq > 0.0 else state_dim
+            self.prior_shared = nn.Sequential(
+                nn.Linear(prior_in, hidden), nn.ReLU(),
+                nn.Linear(hidden, hidden), nn.ReLU(),
+            )
+            self.prior_head = nn.Linear(hidden, n_actions)
+            for p in (*self.prior_shared.parameters(),
+                      *self.prior_head.parameters()):
+                p.requires_grad_(False)
 
     def forward(self, x):
         h = self.shared(x)
         out = self.head(h)
         out = out.view(-1, self.n_actions, 2)
         lower = out[:, :, 0]
-        delta = F.softplus(out[:, :, 1]) + 1e-6
+        raw = out[:, :, 1]
+        if self.width_prior_beta > 0.0:
+            with torch.no_grad():
+                px = x
+                if self.width_prior_freq > 0.0:
+                    px = torch.cat([torch.sin(self.width_prior_freq * x),
+                                    torch.cos(self.width_prior_freq * x)],
+                                   dim=-1)
+                praw = self.prior_head(self.prior_shared(px)).abs()
+            raw = raw + self.width_prior_beta * praw
+        delta = F.softplus(raw) + 1e-6
         upper = lower + delta
         return lower, upper
 
@@ -178,15 +222,35 @@ class IntervalDQNAgent:
 
     def __init__(self, lr=LR, gamma=GAMMA, hidden=HIDDEN, c_train=0.5,
                  target_coverage=0.85, width_reg=0.01,
-                 warmup_steps=5000, warmup_epsilon=0.8):
+                 warmup_steps=5000, warmup_epsilon=0.8,
+                 ood_width_lambda=0.0, ood_width_floor=4.0,
+                 ood_neg_mode="shuffle", width_prior_beta=0.0,
+                 width_prior_freq=0.0, layernorm=False):
         self.n_actions = N_ACTIONS
         self.gamma = gamma
         self.c_train = c_train
         self.width_reg = width_reg
+        # E1 contrastive off-manifold width term (WIDTH_MECHANISM_PROBES.md):
+        # push widths on structure-destroyed negatives up to ood_width_floor
+        # (an ABSOLUTE width — set it ~4x the healthy on-dist width scale).
+        self.ood_width_lambda = ood_width_lambda
+        self.ood_width_floor = ood_width_floor
+        # negative generator: 'shuffle' = per-dim batch permutation (far
+        # off-manifold); 'mix' = 50/50 blend of state and shuffled state
+        # (near-manifold); 'noise' = state + 1 sigma per-dim gaussian
+        self.ood_neg_mode = ood_neg_mode
         self.step_count = 0
 
-        self.q_net = IntervalQNetwork(hidden=hidden)
-        self.target_net = IntervalQNetwork(hidden=hidden)
+        self.q_net = IntervalQNetwork(hidden=hidden,
+                                      width_prior_beta=width_prior_beta,
+                                      width_prior_freq=width_prior_freq,
+                                      layernorm=layernorm)
+        self.target_net = IntervalQNetwork(hidden=hidden,
+                                           width_prior_beta=width_prior_beta,
+                                           width_prior_freq=width_prior_freq,
+                                           layernorm=layernorm)
+        # load_state_dict copies the frozen prior too: q and target share
+        # the same prior function
         self.target_net.load_state_dict(self.q_net.state_dict())
         self.optimizer = optim.Adam(self.q_net.parameters(), lr=lr)
         self.buffer = ReplayBuffer()
@@ -301,6 +365,27 @@ class IntervalDQNAgent:
             target_u = rewards + self.gamma * tgt_upper * (1 - dones)
 
         loss = self.interval_loss_sampled(lower_a, upper_a, target_l, target_u)
+
+        if self.ood_width_lambda > 0.0:
+            # negatives: per-dim batch permutation of the current batch —
+            # marginals preserved, joint structure destroyed (off-manifold)
+            perms = torch.stack(
+                [torch.randperm(len(states)) for _ in range(states.shape[1])],
+                dim=1)                       # perms[i, d]: row to take dim d from
+            neg = states[perms, torch.arange(states.shape[1])]
+            if self.ood_neg_mode == "mix":
+                neg = 0.5 * states + 0.5 * neg
+            elif self.ood_neg_mode == "noise":
+                neg = states + states.std(dim=0, keepdim=True) * \
+                    torch.randn_like(states)
+            neg_lower, neg_upper = self.q_net(neg)
+            neg_w = neg_upper - neg_lower
+            # ABSOLUTE floor + bounded relative hinge: a floor keyed to the
+            # current batch width feeds back through the shared trunk and
+            # runs away (measured: on-dist width 4 -> 2033). Bounded form
+            # caps the term at lambda and its gradient dies once satisfied.
+            ood_loss = F.relu(1.0 - neg_w / self.ood_width_floor).pow(2).mean()
+            loss = loss + self.ood_width_lambda * ood_loss
 
         self.optimizer.zero_grad()
         loss.backward()

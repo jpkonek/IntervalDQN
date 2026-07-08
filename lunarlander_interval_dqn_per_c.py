@@ -54,6 +54,17 @@ def parse_args():
     p.add_argument("--warmup-epsilon", type=float, default=0.8)
     p.add_argument("--width-reg", type=float, default=0.01)
     p.add_argument("--target-coverage", type=float, default=0.85)
+    p.add_argument("--ood-width-lambda", type=float, default=0.0,
+                   help="E1 contrastive off-manifold width term (0 = off)")
+    p.add_argument("--ood-width-floor", type=float, default=4.0)
+    p.add_argument("--ood-neg-mode", default="shuffle",
+                   choices=["shuffle", "mix", "noise"])
+    p.add_argument("--width-prior-beta", type=float, default=0.0,
+                   help="frozen width-prior strength (0 = off)")
+    p.add_argument("--width-prior-freq", type=float, default=0.0,
+                   help="Fourier-feature frequency for the width prior")
+    p.add_argument("--layernorm", action="store_true",
+                   help="ATC-style LayerNorm trunk (LL ablation)")
     p.add_argument("--output-dir", required=True)
     return p.parse_args()
 
@@ -92,6 +103,12 @@ def main():
         warmup_epsilon=args.warmup_epsilon,
         width_reg=args.width_reg,
         target_coverage=args.target_coverage,
+        ood_width_lambda=args.ood_width_lambda,
+        ood_width_floor=args.ood_width_floor,
+        ood_neg_mode=args.ood_neg_mode,
+        width_prior_beta=args.width_prior_beta,
+        width_prior_freq=args.width_prior_freq,
+        layernorm=args.layernorm,
     )
     env = make_env()  # standard LunarLander, no wind, normal gravity
 

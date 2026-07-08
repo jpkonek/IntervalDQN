@@ -39,13 +39,24 @@ def main():
     ap.add_argument("--out", default=None)
     ap.add_argument("--noop", action="store_true",
                     help="all-NOOP baseline instead of the agent")
+    ap.add_argument("--controller", action="store_true",
+                    help="checkpoint is a controller-frame agent "
+                         "(bluebird_controller_dqn)")
     ap.add_argument("--c", type=float, default=None,
                     help="fixed Hurwicz c (default: adaptive)")
     ap.add_argument("--fps", type=int, default=8)
     args = ap.parse_args()
 
     agent = None
-    if not args.noop:
+    bcd = None
+    if args.controller:
+        import bluebird_controller_dqn as bcd
+        agent, ckpt = bcd.load_agent(args.ckpt, device="cpu")
+        env = bcd.make_controller_env(scenario_duration=args.duration,
+                                      k_nearest=ckpt.get("k", 3))
+        label = (f"controller DQN ({os.path.basename(args.ckpt)}, "
+                 f"{'adaptive c' if args.c is None else f'c={args.c}'})")
+    elif not args.noop:
         agent, ckpt = bid.load_agent(args.ckpt, device="cpu")
         env = bid.make_env(scenario_duration=args.duration,
                            k_nearest=ckpt.get("k", 3),
@@ -68,14 +79,22 @@ def main():
     adaptive = (not args.noop) and args.c is None
     if adaptive and not hasattr(agent, "adaptive_w_mid"):
         # calibrate on the first observation batch (cheap, adequate here)
-        agent.calibrate_w_mid([dict(obs)])
+        if args.controller:
+            toks = bcd.build_tokens(env, obs, info, sorted(obs.keys()))
+            agent.calibrate_w_mid([toks])
+        else:
+            agent.calibrate_w_mid([dict(obs)])
 
     frames = []
     violated_at = None
     for step in range(maxstep):
         if not obs:
             break
-        if agent is not None:
+        if args.controller:
+            actions, _ = agent.generate_action(
+                env, obs, info, c=args.c, force_epsilon=0.0,
+                adaptive=adaptive)
+        elif agent is not None:
             actions, _ = agent.generate_action(
                 obs, c=args.c, force_epsilon=0.0, adaptive=adaptive)
         else:
