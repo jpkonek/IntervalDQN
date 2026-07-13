@@ -351,6 +351,41 @@ slope, and GLOBAL WIDTH-PRESSURE DIRECTION (mean delta_raw drift on/off
 manifold across training checkpoints — the landscape-hypothesis
 diagnostic).
 
+## 12b milestone readings (a4v2 probe; frozen state set)
+
+ep500 (probe_battery_a4v2_20260708_163712.json): landscape hypothesis
+HALF-confirmed. (i) The 12a-style global downward width pressure is GONE —
+mean delta_raw on fixed real states rises 4.86→8.85 over ep25→550, garbage
+rises in parallel — the diverse-outcome objective pushes width up
+everywhere, as predicted. (ii) BUT no novelty elevation yet: aircraft-swap
+states (31 bits novel) sit exactly at neighbor-predicted width (excess
+1.03, AUROC 0.565), and the certain basin persists in ordering (garbage
+0.76×, shuffled 0.62× real width; AUROC 0.22–0.33 ANTI-separation; present
+from ep25). In-range width-norm slope +0.209 (width_scalars channel live).
+
+PRE-REGISTERED for next milestone (~ep1000–1500): in LL the elevation was
+fully formed by 25% of training. If by ep1500 (37%) swap kNN-excess is
+still ≈1 and garbage still < 1× real, conclude outcome diversity fixes the
+PRESSURE DIRECTION but not the OOD ORDERING in this architecture/token
+regime → E1-ATC term (token-level negatives, anchored floor) becomes the
+required lever, as run 12c or a fine-tune stage — do NOT restart 12b for
+it (policy learning is independent of width ordering).
+
+ep1000/ep1500 readings + **DECISION (pre-registered criterion fired)**:
+swap kNN-excess dead flat across 500/1000/1500 (1.03/1.01/1.02, novelty
+27–31 bits — the elevation is NOT emerging on the operationally relevant
+near-OOD); shuffled-field floor still broken (0.62→0.70→0.90). Honest
+trend note: the basin is slowly FILLING as outcome diversity accumulates
+(garbage excess 0.94→1.04; garb/real raw deficit 0.79→0.87) — but filling
+to neighbor-predicted (≈1.0) is not elevation (LL gives 1.2–2.2 on novel
+states). CALL: outcome diversity fixes pressure direction, not OOD
+ordering → E1-ATC (token-level aircraft-swap negatives, anchored absolute
+floor, bounded hinge) is the required lever, as run 12c or a fine-tune
+stage; 12b runs to completion untouched. C2 side-note: rho ~0 at
+ep1000/1500 (0.04) with coverage creeping (0.11→0.15) while policy
+improves — B3's credit-starvation prediction; CTDE/longer-horizon thread
+stays open for JK.
+
 RESULT (ln_ablation_probe.json): **LayerNorm EXONERATED.** LN-LL trains
 healthily (R 243/234) and RETAINS the full mechanism: wind kNN-excess
 1.18/1.84 (inside baseline's 1.18–2.21), shuffled 1.95/2.32, box

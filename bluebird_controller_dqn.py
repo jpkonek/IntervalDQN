@@ -771,6 +771,83 @@ def pad_state_batch(states, device):
             torch.from_numpy(mask).to(device))
 
 
+def build_e1_negatives(tok, mask):
+    """E1-ATC negative builder (WIDTH_MECHANISM_PROBES.md, ATC transfer
+    spec). Off-manifold negative states from the current training batch,
+    TWO generators applied 50/50 within each batch:
+
+      (a) AIRCRAFT-SWAP (first half): each negative's token set is
+          assembled from individual real aircraft rows sampled (without
+          replacement) from DIFFERENT states of the batch — plausible
+          aircraft, impossible joint traffic picture (the 12b condition
+          that shows NO width elevation; the operational target). Counts
+          are sampled from the batch's own real per-state counts; when a
+          negative has >=2 rows and the batch spans >=2 source states,
+          >=2 distinct source states are enforced by construction.
+      (b) FIELD-SHUFFLE (second half): per-(token,feature) recombination —
+          an independent permutation of each feature column across the
+          pooled real rows of the second half (the certain-basin garbage
+          condition). Per-feature marginals are exactly preserved; counts
+          are the originals.
+
+    Padding rows are never sampled (the pool is mask-selected). Returns
+    (neg_tok [Bn, Nn, D], neg_mask [Bn, Nn] bool, info) or None when the
+    batch has no real aircraft rows. info carries provenance for
+    --selftest: {"n_swap", "swap_src" (per-negative source-state index
+    lists), "shuf_counts"}. Consumes torch RNG only."""
+    B, Nmax, D = tok.shape
+    counts = mask.sum(dim=1)
+    nz = torch.nonzero(counts > 0).flatten()
+    if len(nz) == 0:
+        return None
+    # global real-row pool with source-state provenance
+    src_idx, row_idx = torch.nonzero(mask, as_tuple=True)
+    pool = tok[src_idx, row_idx]                     # [P, D]
+    P = pool.shape[0]
+    n_states = len(torch.unique(src_idx))
+    real_counts = counts[nz]
+
+    negs, swap_src = [], []
+    n_swap = B // 2
+    for _ in range(n_swap):                          # (a) aircraft-swap
+        n_i = int(real_counts[torch.randint(len(nz), (1,))].item())
+        n_i = min(n_i, P)
+        sel = torch.randperm(P, device=tok.device)[:n_i]
+        srcs = src_idx[sel]
+        if n_i >= 2 and n_states >= 2 and len(torch.unique(srcs)) < 2:
+            other = torch.nonzero(src_idx != srcs[0]).flatten()
+            sel = sel.clone()
+            sel[-1] = other[torch.randint(len(other), (1,))]
+            srcs = src_idx[sel]
+        negs.append(pool[sel])
+        swap_src.append(srcs.tolist())
+
+    shuf_states = [b for b in range(n_swap, B) if counts[b] > 0]
+    shuf_counts = [int(counts[b].item()) for b in shuf_states]
+    if shuf_states:                                  # (b) field-shuffle
+        pool2 = torch.cat([tok[b][mask[b]] for b in shuf_states], dim=0)
+        P2 = pool2.shape[0]
+        shuf = torch.stack(
+            [pool2[torch.randperm(P2, device=tok.device), d]
+             for d in range(D)], dim=1)
+        off = 0
+        for n_i in shuf_counts:
+            negs.append(shuf[off:off + n_i])
+            off += n_i
+
+    if not negs:
+        return None
+    Nn = max(t.shape[0] for t in negs)
+    neg_tok = tok.new_zeros(len(negs), Nn, D)
+    neg_mask = torch.zeros(len(negs), Nn, dtype=torch.bool,
+                           device=tok.device)
+    for j, t in enumerate(negs):
+        neg_tok[j, :t.shape[0]] = t
+        neg_mask[j, :t.shape[0]] = True
+    return neg_tok, neg_mask, {"n_swap": n_swap, "swap_src": swap_src,
+                               "shuf_counts": shuf_counts}
+
+
 # ===========================================================================
 # CONTROLLER AGENT
 # ===========================================================================
@@ -784,7 +861,8 @@ class ControllerAgent:
                  buffer_size=BUFFER_SIZE, batch_size=BATCH_SIZE,
                  device="cpu", t_cap_risky=0.99,
                  terminal_boost=TERMINAL_BOOST, mask_reissue=True,
-                 width_scalars=False):
+                 width_scalars=False, e1_width=False, e1_lambda=0.5,
+                 e1_floor=30.0):
         self.token_dim = token_dim
         self.n_instr = n_instr
         self.gamma = gamma
@@ -794,6 +872,18 @@ class ControllerAgent:
         self.device = torch.device(device)
         self.mask_reissue = mask_reissue
         self.width_scalars = width_scalars
+        # E1-ATC contrastive off-manifold width term (default OFF): push
+        # candidate widths on build_e1_negatives() states up to an
+        # ABSOLUTE floor via the bounded hinge lambda*relu(1 - w/floor)^2.
+        # Floor default 30.0 = 3x the measured median on-dist candidate
+        # width (10.1) of the 12b ep1500 net on the a4v2 frozen probe
+        # states. NEVER key the floor to live batch widths — the
+        # self-referential floor feeds back through the shared trunk and
+        # runs away (LL attempt 1: on-dist width 4 -> 2033;
+        # WIDTH_MECHANISM_PROBES.md). Adds NO parameters.
+        self.e1_width = e1_width
+        self.e1_lambda = e1_lambda
+        self.e1_floor = e1_floor
         self.step_count = 0
 
         self.q_net = ControllerQNet(token_dim, n_instr=n_instr,
@@ -990,6 +1080,20 @@ class ControllerAgent:
         total_loss = total_loss + self.width_reg * width ** 2 * width_mask
         return total_loss.mean()
 
+    # ---- E1 hinge (factored for selftest) ------------------------------
+    def e1_hinge(self, neg_tok, neg_mask):
+        """Bounded hinge on the online net's candidate widths at negative
+        states: mean over VALID candidates (NOOP head included) of
+        relu(1 - w/floor)^2. In [0, 1]; exactly 0 (dead gradient) once
+        every valid width reaches the floor — runaway impossible by
+        construction. Pure extra loss term: touches no tracker, buffer,
+        re-issue mask, or target computation."""
+        ac_l, ac_u, nl, nu = self.q_net(neg_tok, neg_mask)
+        cl, cu, valid = candidate_intervals(ac_l, ac_u, nl, nu, neg_mask)
+        h = F.relu(1.0 - (cu - cl) / self.e1_floor).pow(2)
+        v = valid.float()
+        return (h * v).sum() / v.sum().clamp(min=1.0)
+
     # ---- target-side Double-DQN argmax (factored for selftest) --------
     @staticmethod
     def double_dqn_argmax(ocl, ocu, nvalid, reissue_mask, c):
@@ -1065,6 +1169,10 @@ class ControllerAgent:
         loss = self.interval_loss_sampled(lower_a, upper_a,
                                           target_l, target_u,
                                           t_vec, width_mask)
+        if self.e1_width and self.e1_lambda > 0.0:
+            neg = build_e1_negatives(tok, mask)
+            if neg is not None:
+                loss = loss + self.e1_lambda * self.e1_hinge(neg[0], neg[1])
         if not torch.isfinite(loss):
             self.optimizer.zero_grad()
             return 0.0
@@ -1323,6 +1431,9 @@ def save_checkpoint(agent, path, episode, extra=None):
         "coverage": agent.coverage,
         "mask_reissue": agent.mask_reissue,
         "width_scalars": getattr(agent, "width_scalars", False),
+        "e1_width": getattr(agent, "e1_width", False),
+        "e1_lambda": getattr(agent, "e1_lambda", 0.5),
+        "e1_floor": getattr(agent, "e1_floor", 30.0),
         "adaptive_w_mid": getattr(agent, "adaptive_w_mid", None),
         "reward_weights": {"alpha": ALPHA_PROGRESS, "beta": BETA_CENTRE,
                            "delta": DELTA_CONFLICT, "eps_fuel": EPS_FUEL,
@@ -1343,6 +1454,9 @@ def load_agent(path, device="cpu", **kwargs):
                             gamma=ckpt.get("gamma", GAMMA),
                             mask_reissue=ckpt.get("mask_reissue", True),
                             width_scalars=ckpt.get("width_scalars", False),
+                            e1_width=ckpt.get("e1_width", False),
+                            e1_lambda=ckpt.get("e1_lambda", 0.5),
+                            e1_floor=ckpt.get("e1_floor", 30.0),
                             device=device, **kwargs)
     agent.q_net.load_state_dict(ckpt["q_net"])
     agent.target_net.load_state_dict(ckpt["q_net"])
@@ -1372,7 +1486,10 @@ def run_training(args, smoke=False):
           f"nstep={args.nstep}, cbp={'ON' if args.cbp else 'OFF'} "
           f"(lag={args.cbp_lag}), "
           f"mask_reissue={'ON' if args.mask_reissue else 'OFF'}, "
-          f"objective={'v2' if args.objective_v2 else 'v1'})")
+          f"objective={'v2' if args.objective_v2 else 'v1'}, "
+          f"e1_width={'ON' if args.e1_width else 'OFF'}"
+          + (f" (lambda={args.e1_lambda}, floor={args.e1_floor})"
+             if args.e1_width else "") + ")")
     print("=" * 100)
 
     print("Creating environment...")
@@ -1394,7 +1511,9 @@ def run_training(args, smoke=False):
         warmup_epsilon=args.warmup_epsilon, buffer_size=args.buffer,
         batch_size=args.batch, device=args.device,
         t_cap_risky=args.t_cap_risky, terminal_boost=args.terminal_boost,
-        mask_reissue=args.mask_reissue, width_scalars=args.width_scalars)
+        mask_reissue=args.mask_reissue, width_scalars=args.width_scalars,
+        e1_width=args.e1_width, e1_lambda=args.e1_lambda,
+        e1_floor=args.e1_floor)
     print(f"network parameters: {agent.param_count()} (target < 100k)")
 
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
@@ -2090,6 +2209,224 @@ def _selftest_delivery_bonus():
           f"no-speed flat 1.0, clock rides deepcopies")
 
 
+def _e1_synthetic_agent(seed, token_dim=12, **kw):
+    """Deterministic small agent + replay for the E1 selftests: same seed
+    => identical weights; buffer items are built by the caller."""
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    return ControllerAgent(token_dim=token_dim, batch_size=16,
+                           buffer_size=1000, device="cpu", **kw)
+
+
+def _e1_synthetic_items(seed, n_items=40, token_dim=12):
+    """Deterministic replay items (state, a_idx, R, next_state, ns_mask,
+    disc, stratum) with variable aircraft counts."""
+    rng = np.random.RandomState(seed)
+    items = []
+    for _ in range(n_items):
+        n = int(rng.randint(1, 6))
+        nn_ = int(rng.randint(1, 6))
+        s = (rng.randn(n, token_dim).astype(np.float32),
+             tuple(f"A{k}" for k in range(n)))
+        ns = (rng.randn(nn_, token_dim).astype(np.float32),
+              tuple(f"B{k}" for k in range(nn_)))
+        a_idx = int(rng.randint(0, 1 + N_INSTR * n))
+        items.append((s, a_idx, float(rng.randn()), ns, None,
+                      GAMMA ** NSTEP, int(rng.randint(0, N_STRATA))))
+    return items
+
+
+def _selftest_e1_default_off(seed=2026):
+    """With e1_width False the train_step code path is EXACTLY the
+    pre-E1 one: no extra RNG draws, no extra loss term. Two agents with
+    identical weights/buffers — one default, one with junk e1_lambda/
+    e1_floor but the flag off — must produce bitwise-identical losses,
+    post-step weights and RNG states."""
+    print("[selftest] E1 default OFF: train_step bitwise unchanged")
+    a1 = _e1_synthetic_agent(seed)
+    a2 = _e1_synthetic_agent(seed, e1_width=False, e1_lambda=123.0,
+                             e1_floor=1.0)
+    a2.q_net.load_state_dict(a1.q_net.state_dict())
+    a2.target_net.load_state_dict(a1.target_net.state_dict())
+    for it in _e1_synthetic_items(seed + 1):
+        a1.buffer.push(*it)
+        a2.buffer.push(*it)
+    losses, rng_states = [], []
+    for ag in (a1, a2):
+        torch.manual_seed(seed + 2)
+        np.random.seed(seed + 2)
+        random.seed(seed + 2)
+        losses.append(ag.train_step())
+        rng_states.append(torch.random.get_rng_state())
+    assert losses[0] == losses[1], \
+        f"FAIL: flag-off loss differs bitwise ({losses[0]!r} vs {losses[1]!r})"
+    assert torch.equal(rng_states[0], rng_states[1]), \
+        "FAIL: flag-off train_step consumed extra torch RNG"
+    for (k1, p1), (k2, p2) in zip(a1.q_net.state_dict().items(),
+                                  a2.q_net.state_dict().items()):
+        assert k1 == k2 and torch.equal(p1, p2), \
+            f"FAIL: post-step weight {k1} differs bitwise with flag off"
+    print(f"  OK  e1_width=False is inert (loss {losses[0]:.6f} bitwise "
+          f"equal, all post-step weights bitwise equal)")
+
+
+def _selftest_e1_negatives(seed=515):
+    """build_e1_negatives: aircraft-swap rows are real rows from >=2
+    distinct source states (never padding), counts come from the batch's
+    real counts; field-shuffle preserves per-feature marginals exactly."""
+    print("[selftest] E1 negative builder (aircraft-swap + field-shuffle)")
+    torch.manual_seed(seed)
+    B, Nmax, D = 8, 6, 5
+    counts = [2, 3, 1, 4, 2, 3, 5, 2]
+    tok = torch.full((B, Nmax, D), -777.0)   # padding sentinel
+    mask = torch.zeros(B, Nmax, dtype=torch.bool)
+    for s, n in enumerate(counts):
+        for i in range(n):
+            for d in range(D):
+                tok[s, i, d] = 100 * s + 10 * i + d   # provenance encoding
+        mask[s, :n] = True
+
+    seen_swap_counts = set()
+    for trial in range(50):
+        neg_tok, neg_mask, info = build_e1_negatives(tok, mask)
+        n_swap = info["n_swap"]
+        assert n_swap == B // 2, f"FAIL: 50/50 split broken ({n_swap})"
+        assert (-777.0 != neg_tok[neg_mask]).all(), \
+            "FAIL: padding sentinel leaked into a real negative row"
+        # swap half: every real row is an exact copy of a real source row
+        for j in range(n_swap):
+            rows = neg_tok[j][neg_mask[j]]
+            n_j = rows.shape[0]
+            srcs = set()
+            for r in rows:
+                v = int(r[0].item())
+                s, i = divmod(v, 100)
+                i //= 10
+                assert bool(mask[s, i]) and torch.equal(r, tok[s, i]), \
+                    f"FAIL: swap row is not a verbatim real source row"
+                srcs.add(s)
+            assert n_j in set(counts), \
+                f"FAIL: swap count {n_j} not a batch real count"
+            seen_swap_counts.add(n_j)
+            assert srcs == set(info["swap_src"][j]), \
+                "FAIL: swap_src provenance mismatch"
+            if n_j >= 2:
+                assert len(srcs) >= 2, \
+                    f"FAIL: swap negative {j} drawn from ONE state"
+        # field-shuffle half: same counts, exact per-feature marginals
+        shuf = neg_tok[n_swap:]
+        shuf_m = neg_mask[n_swap:]
+        assert [int(m.sum()) for m in shuf_m] == counts[B // 2:], \
+            "FAIL: field-shuffle counts changed"
+        pool2 = torch.cat([tok[b][mask[b]] for b in range(B // 2, B)], 0)
+        got = shuf[shuf_m]
+        for d in range(D):
+            assert torch.equal(got[:, d].sort().values,
+                               pool2[:, d].sort().values), \
+                f"FAIL: field-shuffle feature {d} marginal not preserved"
+    assert len(seen_swap_counts) >= 3, \
+        f"FAIL: swap count distribution degenerate ({seen_swap_counts})"
+    print(f"  OK  negatives verbatim-real, swap always multi-source, "
+          f"swap counts {sorted(seen_swap_counts)} from batch counts, "
+          f"shuffle marginals exact (50 trials)")
+
+
+def _selftest_e1_hinge(seed=808):
+    """Bounded hinge: tiny widths => 0 < term <= 1 (so the loss term is
+    capped at e1_lambda); widths >= floor => term EXACTLY 0 with an
+    exactly-zero gradient (runaway impossible by construction)."""
+    print("[selftest] E1 hinge boundedness + dead gradient at the floor")
+    agent = _e1_synthetic_agent(seed, token_dim=6, e1_width=True,
+                                e1_lambda=0.5, e1_floor=30.0)
+    net = agent.q_net
+
+    def force_raw(bias_val):
+        with torch.no_grad():
+            lin_i = net.instr_head[-1]
+            lin_i.weight.zero_()
+            lin_i.bias[0::2] = 0.0          # lower channels
+            lin_i.bias[1::2] = bias_val     # delta_raw channels
+            lin_n = net.noop_head[-1]
+            lin_n.weight.zero_()
+            lin_n.bias[0] = 0.0
+            lin_n.bias[1] = bias_val
+
+    tok = torch.randn(4, 5, 6)
+    mask = torch.ones(4, 5, dtype=torch.bool)
+    mask[0, 3:] = False
+
+    force_raw(-30.0)                        # widths ~ 1e-6 << floor
+    term = agent.e1_hinge(tok, mask)
+    assert 0.0 < term.item() <= 1.0, \
+        f"FAIL: tiny-width hinge term {term.item()} outside (0, 1]"
+    assert agent.e1_lambda * term.item() <= agent.e1_lambda, \
+        "FAIL: E1 loss term exceeds lambda"
+
+    force_raw(200.0)                        # widths = 200 >= floor 30
+    term = agent.e1_hinge(tok, mask)
+    assert term.item() == 0.0, \
+        f"FAIL: term {term.item()!r} not EXACTLY 0 with widths >= floor"
+    net.zero_grad()
+    (agent.e1_lambda * term).backward()
+    for name, p in net.named_parameters():
+        assert p.grad is None or float(p.grad.abs().max()) == 0.0, \
+            f"FAIL: nonzero gradient through a satisfied hinge ({name})"
+    print("  OK  hinge in (0, 1] under tiny widths, exactly 0 with zero "
+          "gradient at/above the floor")
+
+
+def _selftest_e1_no_contamination(seed=3033):
+    """An E1-on train_step must differ from E1-off ONLY in the loss/
+    gradient: coverage trackers (t values, hit histories), bootstrap-hit
+    log and replay buffer are untouched by the negatives pass."""
+    print("[selftest] E1 no-contamination (trackers, buffer, bootstrap log)")
+    a_off = _e1_synthetic_agent(seed)
+    a_on = _e1_synthetic_agent(seed, e1_width=True, e1_lambda=0.5,
+                               e1_floor=30.0)
+    a_on.q_net.load_state_dict(a_off.q_net.state_dict())
+    a_on.target_net.load_state_dict(a_off.target_net.state_dict())
+    for it in _e1_synthetic_items(seed + 1):
+        a_off.buffer.push(*it)
+        a_on.buffer.push(*it)
+    n_before = len(a_off.buffer)
+    for ag in (a_off, a_on):
+        torch.manual_seed(seed + 2)
+        np.random.seed(seed + 2)
+        random.seed(seed + 2)
+        loss = ag.train_step()
+        assert np.isfinite(loss), "FAIL: non-finite train_step loss"
+    assert [tr.t for tr in a_off.trackers] == \
+           [tr.t for tr in a_on.trackers], \
+        "FAIL: E1 changed a coverage tracker's t"
+    assert [list(tr.hits) for tr in a_off.trackers] == \
+           [list(tr.hits) for tr in a_on.trackers], \
+        "FAIL: E1 fed hits into a coverage tracker"
+    assert list(a_off.bootstrap_hits) == list(a_on.bootstrap_hits), \
+        "FAIL: E1 negatives leaked into the bootstrap-coverage log"
+    assert len(a_on.buffer) == len(a_off.buffer) == n_before, \
+        "FAIL: train_step changed the replay buffer length"
+    print("  OK  identical tracker t/hits, bootstrap log and buffer "
+          "length with E1 on vs off")
+
+
+def _selftest_e1_params():
+    """E1 adds NO parameters: 59016 base, +12 with width_scalars,
+    invariant to the e1 flags."""
+    print("[selftest] E1 parameter neutrality")
+    torch.manual_seed(0)
+    base = sum(p.numel() for p in ControllerQNet(60).parameters())
+    ws = sum(p.numel() for p in
+             ControllerQNet(60, width_scalars=True).parameters())
+    assert base == 59016, f"FAIL: base param count {base} != 59016"
+    assert ws == 59016 + 12, f"FAIL: width_scalars count {ws} != 59028"
+    a_on = _e1_synthetic_agent(1, token_dim=60, e1_width=True)
+    a_off = _e1_synthetic_agent(1, token_dim=60)
+    assert a_on.param_count() == a_off.param_count() == base, \
+        "FAIL: e1 flags changed the parameter count"
+    print(f"  OK  {base} params (+12 width_scalars), unchanged by E1")
+
+
 def _selftest_cbp(seed=10043, n_steps=50):
     """CBP invariants on the REAL env and the REAL run_episode path:
       (1) clone side-effect-freeness: the live env fingerprint is
@@ -2207,6 +2544,11 @@ def run_selftest():
     _selftest_windower()
     _selftest_mask()
     _selftest_delivery_bonus()
+    _selftest_e1_default_off()
+    _selftest_e1_negatives()
+    _selftest_e1_hinge()
+    _selftest_e1_no_contamination()
+    _selftest_e1_params()
     net = ControllerQNet(60)
     n_params = sum(p.numel() for p in net.parameters())
     assert n_params < 100000, f"FAIL: {n_params} params >= 100k budget"
@@ -2261,6 +2603,24 @@ if __name__ == "__main__":
                         action=argparse.BooleanOptionalAction, default=False,
                         help="unnormalized count/density scalars into the "
                              "width heads (zero-init; JK directive 8 July)")
+    parser.add_argument("--e1_width",
+                        action=argparse.BooleanOptionalAction, default=False,
+                        help="E1-ATC contrastive off-manifold width term "
+                             "(default OFF): bounded hinge "
+                             "lambda*relu(1 - w/floor)^2 pushing candidate "
+                             "widths on aircraft-swap + field-shuffle "
+                             "batch negatives up to an ABSOLUTE floor "
+                             "(WIDTH_MECHANISM_PROBES.md, ATC transfer "
+                             "spec; 12b decision). Adds no parameters.")
+    parser.add_argument("--e1_lambda", type=float, default=0.5,
+                        help="E1 hinge weight (term is capped at "
+                             "e1_lambda by construction)")
+    parser.add_argument("--e1_floor", type=float, default=30.0,
+                        help="E1 absolute width floor; default 30.0 = 3x "
+                             "the measured median on-dist candidate width "
+                             "(10.1) of the 12b ep1500 net on the a4v2 "
+                             "frozen probe states. Never keyed to live "
+                             "batch widths (LL attempt-1 runaway lesson).")
     parser.add_argument("--mask_reissue",
                         action=argparse.BooleanOptionalAction, default=True,
                         help="mask candidates that re-issue an aircraft's "

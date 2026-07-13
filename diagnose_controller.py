@@ -74,6 +74,7 @@ from bluebird_controller_dqn import (
     CONFLICT_FL, CONFLICT_RANGE_NM, CHECKPOINT_DIR, N_INSTR,
     make_controller_env, build_tokens, sector_snapshot, shaping_terms,
     snapshot_stratum, candidate_intervals, load_agent, run_episode,
+    pad_state_batch,
 )
 from bluebird_interval_dqn import detect_violation, haversine_nm, SEC_PER_STEP
 
@@ -126,6 +127,25 @@ EXPECT = {
            "FINDING over all three populated strata (the previous "
            "monotone PASS was vacuous — stratum 1 had 0 states), not "
            "scored."),
+    "a4v2": ("CORRECTED A4 instruments (WIDTH_MECHANISM_PROBES.md 8-Jul "
+             "correction): (a) kNN-excess = width / width predicted by 10 "
+             "nearest ON-POLICY neighbours in the net's own pooled summary "
+             "space; (b) activation-pattern novelty (Hamming bits to "
+             "nearest on-policy ReLU pattern); (c) in-range width-vs-norm "
+             "slope; (d) width-pressure ladder = mean delta_raw "
+             "(pre-softplus) on FROZEN probe states across the training "
+             "checkpoint ladder. SANITY: held-out on-policy kNN-excess "
+             "~ 1 (else instrument broken). If the LL novelty-elevation "
+             "mechanism transferred to 12b: AIRCRAFT-SWAP states "
+             "(plausible aircraft, impossible joint picture — the "
+             "operationally relevant near-OOD) show kNN-excess > 1.2 "
+             "with pattern novelty >> held-out; garbage/shuffled-field "
+             "must show kNN-excess >= 1.0 (excess < 1 = the A4 "
+             "certain-basin collapse persists). LADDER (finding, not "
+             "scored): under the degenerate-landscape hypothesis, 12b's "
+             "outcome diversity should lift the global downward width "
+             "pressure — off-manifold delta_raw should not collapse "
+             "toward the certain basin as training proceeds."),
     "c2": ("Rank correlation (Spearman) of ground-truth H=15 rollout "
            "returns vs net Hurwicz scores rho > 0.4 by end of 12a; near 0 "
            "= net hasn't learned the objective. Also: unbiased coverage = "
@@ -2402,6 +2422,390 @@ def probe_a4(args):
                        "inversions": inversions}}
 
 
+# ===========================================================================
+# A4v2 — corrected width-mechanism instruments (WIDTH_MECHANISM_PROBES.md)
+# ===========================================================================
+
+A4V2_KNN_K = 10
+A4V2_FROZEN_NPZ = os.path.join(DIAG_DIR, "a4v2_frozen_probe_states.npz")
+
+
+@torch.no_grad()
+def _a4v2_stats(net, tok_list, batch=64, _checked=[False]):
+    """Per-state instruments for a list of token arrays [N_i, D] (all
+    rows real aircraft). Returns dict of numpy arrays over states:
+      width   : mean candidate interval width over VALID candidates only
+      raw     : mean candidate delta_raw (PRE-softplus), captured via
+                forward hooks on instr_head/noop_head (the ensemble
+                module's _raw_heads pattern) + the width_scalars channel
+                added exactly as ControllerQNet.forward does
+      raw_noop: the NOOP head's delta_raw alone
+      summary : the net's masked-mean pooled 64-d sector summary
+                (captured as the INPUT of noop_head — that IS the summary)
+      pattern : 256-bit ReLU on/off pattern, bool [K, 256]: the two
+                token-MLP ReLUs + the two attention-block FFN ReLUs,
+                pooled per-state by masked MEAN over aircraft then > 0.5
+                (majority vote; documented choice — an any-on pooling
+                saturates at high aircraft counts)
+      norm    : mean L2 norm of the state's token rows (in-range slope)
+    Fidelity: on the first batch the captured raws are pushed back
+    through softplus and asserted equal to the net's own (u - l).
+    """
+    import torch.nn.functional as F
+    relus = [net.token_mlp[1], net.token_mlp[3],
+             net.ffn[0][1], net.ffn[1][1]]
+    widths, raws, raws_noop, sums, pats, norms = [], [], [], [], [], []
+    for b0 in range(0, len(tok_list), batch):
+        chunk = tok_list[b0:b0 + batch]
+        tok, mask = pad_state_batch([(t, None) for t in chunk],
+                                    torch.device("cpu"))
+        cap = {}
+
+        def _noop_hook(_m, inp, out):
+            cap["noop"] = out
+            cap["summary"] = inp[0]
+
+        handles = [
+            net.instr_head.register_forward_hook(
+                lambda _m, _i, o: cap.__setitem__("instr", o)),
+            net.noop_head.register_forward_hook(_noop_hook),
+        ]
+        for li, m in enumerate(relus):
+            handles.append(m.register_forward_hook(
+                lambda _m, _i, o, li=li: cap.__setitem__(("relu", li), o)))
+        try:
+            ac_l, ac_u, nl, nu = net(tok, mask)
+        finally:
+            for h in handles:
+                h.remove()
+        B, N, _ = tok.shape
+        out = cap["instr"].view(B, N, net.n_instr, 2)
+        ac_raw = out[..., 1]
+        noop_raw = cap["noop"][:, 1]
+        if getattr(net, "width_scalars", False):
+            cf = net._count_feats(mask)
+            ac_raw = ac_raw + net.wscalar_instr(cf).unsqueeze(1)
+            noop_raw = noop_raw + net.wscalar_noop(cf)[:, 0]
+        if not _checked[0]:
+            err = max(
+                float((out[..., 0] + F.softplus(ac_raw) + 1e-6
+                       - ac_u).abs().max()),
+                float((cap["noop"][:, 0] + F.softplus(noop_raw) + 1e-6
+                       - nu).abs().max()))
+            assert err <= 1e-5, f"a4v2 raw-head hook drifted: {err}"
+            print(f"  [mirror] hooked delta_raw -> softplus == net (u-l) "
+                  f"(max err {err:.1e})  OK")
+            _checked[0] = True
+        cl, cu, valid = candidate_intervals(ac_l, ac_u, nl, nu, mask)
+        vm = valid.float()
+        nv = vm.sum(dim=1)
+        widths.append((((cu - cl) * vm).sum(dim=1) / nv).numpy())
+        raw_cand = torch.cat([noop_raw.unsqueeze(1),
+                              ac_raw.reshape(B, -1)], dim=1)
+        raws.append(((raw_cand * vm).sum(dim=1) / nv).numpy())
+        raws_noop.append(noop_raw.numpy())
+        sums.append(cap["summary"].numpy())
+        acts = torch.cat([cap[("relu", li)] for li in range(len(relus))],
+                         dim=-1) > 0                     # [B, N, 256]
+        denom = mask.sum(dim=1, keepdim=True).clamp(min=1).float()
+        pooled = (acts.float() * mask.unsqueeze(-1)).sum(dim=1) / denom
+        pats.append((pooled > 0.5).numpy())
+        norms.append(np.array([float(np.linalg.norm(t, axis=1).mean())
+                               for t in chunk]))
+    return {"width": np.concatenate(widths),
+            "raw": np.concatenate(raws),
+            "raw_noop": np.concatenate(raws_noop),
+            "summary": np.concatenate(sums, axis=0),
+            "pattern": np.concatenate(pats, axis=0),
+            "norm": np.concatenate(norms)}
+
+
+def _a4v2_knn_excess(w_probe, sum_probe, ref_w, ref_sum, k=A4V2_KNN_K):
+    """Per-state width / mean width of the k nearest on-policy neighbours
+    in summary space (Euclidean)."""
+    p2 = (sum_probe ** 2).sum(axis=1)[:, None]
+    r2 = (ref_sum ** 2).sum(axis=1)[None, :]
+    with np.errstate(all="ignore"):   # Accelerate BLAS raises spurious
+        d2 = p2 + r2 - 2.0 * (sum_probe @ ref_sum.T)   # FP flags on macOS
+    assert np.isfinite(d2).all(), "non-finite kNN distances"
+    nn = np.argpartition(d2, k, axis=1)[:, :k]
+    pred = ref_w[nn].mean(axis=1)
+    return w_probe / np.maximum(pred, 1e-9)
+
+
+def _a4v2_novelty(pat_probe, pat_ref):
+    """Hamming distance (bits of 256) to the nearest on-policy pattern."""
+    P = pat_probe.astype(np.float32)
+    R = pat_ref.astype(np.float32)
+    with np.errstate(all="ignore"):   # spurious Accelerate FP flags
+        d = P @ (1.0 - R).T + (1.0 - P) @ R.T
+    assert np.isfinite(d).all(), "non-finite pattern distances"
+    return d.min(axis=1)
+
+
+def _a4v2_auroc(w_real, w_cond):
+    """P(width_cond > width_real), ties 0.5 — per-state separability."""
+    r = rankdata(np.concatenate([w_real, w_cond]))
+    n0, n1 = len(w_real), len(w_cond)
+    return float((r[n0:].sum() - n1 * (n1 + 1) / 2.0) / (n0 * n1))
+
+
+def probe_a4v2(args):
+    print("\n" + "=" * 78)
+    print("A4v2 [CKPT] CORRECTED WIDTH-MECHANISM INSTRUMENTS "
+          "(kNN-excess, pattern novelty, in-range slope, "
+          "width-pressure ladder)")
+    print("EXPECTATION:", EXPECT["a4v2"])
+    print("=" * 78)
+    torch.set_num_threads(2)   # live training run on this machine
+    quick = getattr(args, "a4v2_quick", False)
+    if quick:
+        print("  [quick] selftest-lite mode: reduced states, 2-point "
+              "ladder, frozen-set file NOT touched")
+    agent, ckpt, path = _ckpt_agent(args)
+    env = get_env(1200)
+    rng = np.random.default_rng(0)
+
+    # ---- on-policy state collection: the checkpoint's own deployed
+    # policy (greedy, c = c_train, re-issue masking as trained), standard
+    # density. Token arrays only — no env snapshots needed.
+    target_total = 200 if quick else 1800
+    max_eps = 3 if quick else 30
+    states, seeds_used = [], []
+    t0 = time.time()
+    for k in range(max_eps):
+        if len(states) >= target_total:
+            break
+        sd = 43000 + k
+        seeds_used.append(sd)
+        li = {}
+        obs, info = env.reset(seed=sd)
+        maxstep = int(getattr(env, "maxstep",
+                              env.config.scenario_duration // SEC_PER_STEP))
+        for _ in range(maxstep):
+            actions, aux = agent.generate_action(
+                env, obs, info, c=agent.c_train, force_epsilon=0.0,
+                last_issued=li)
+            idx = aux["cand_idx"]
+            if idx != 0 and getattr(agent, "mask_reissue", False):
+                i, j = divmod(idx - 1, N_INSTR)
+                li[aux["callsigns"][i]] = j
+            if aux["tokens"].shape[0] >= 2:
+                states.append(aux["tokens"])
+            obs, _, _, _, info = env.step(actions)
+            v, _, _ = detect_violation(info)
+            if v:
+                break
+    # split: every 6th state HELD OUT (probe condition i), rest =
+    # on-policy reference pool for kNN / patterns. Temporal neighbours of
+    # held-out states remain in the reference — that is the point of the
+    # sanity check (excess ~ 1 for states the pool genuinely covers).
+    held = states[::6]
+    ref = [s for i, s in enumerate(states) if i % 6 != 0]
+    print(f"  on-policy collection: {len(states)} states over "
+          f"{len(seeds_used)} episodes (seeds {seeds_used[0]}.."
+          f"{seeds_used[-1]}), {time.time() - t0:.0f}s; "
+          f"reference={len(ref)}, held-out={len(held)}")
+
+    # ---- OOD condition construction (shapes mirror held-out states)
+    n_cond = min(60 if quick else 200, len(held))
+    all_ref = np.concatenate(ref, axis=0)
+    lo_f, hi_f = all_ref.min(axis=0), all_ref.max(axis=0)
+    D = all_ref.shape[1]
+
+    def make_swap(shape_tok):
+        """AIRCRAFT-SWAP: each token row is a REAL aircraft token sampled
+        from a DIFFERENT collected state (plausible aircraft, impossible
+        joint traffic picture)."""
+        N = shape_tok.shape[0]
+        st_idx = rng.choice(len(ref), size=N, replace=False)
+        return np.stack([ref[s][rng.integers(ref[s].shape[0])]
+                         for s in st_idx]).astype(np.float32)
+
+    def make_garbage(shape_tok):
+        """A4-style box garbage: per-feature uniform over the pool box."""
+        return rng.uniform(lo_f, hi_f,
+                           size=shape_tok.shape).astype(np.float32)
+
+    def make_shuffled_field(shape_tok):
+        """SHUFFLED-FIELD (a4's marginal-preserving recombination taken
+        to the per-feature level): every (token, feature) cell drawn
+        independently from the pool's rows — marginals intact, within-
+        token coherence destroyed (incoherent aircraft)."""
+        N = shape_tok.shape[0]
+        idx = rng.integers(0, all_ref.shape[0], size=(N, D))
+        return all_ref[idx, np.arange(D)[None, :]].astype(np.float32)
+
+    base_shapes = held[:n_cond]
+    conditions = {
+        "real_heldout": held,
+        "aircraft_swap": [make_swap(t) for t in base_shapes],
+        "box_garbage": [make_garbage(t) for t in base_shapes],
+        "shuffled_field": [make_shuffled_field(t) for t in base_shapes],
+    }
+
+    # ---- instruments on the evaluated checkpoint
+    net = agent.q_net
+    ref_stats = _a4v2_stats(net, ref)
+    slope = spearman(ref_stats["width"], ref_stats["norm"])
+    rows = {}
+    for name, toks in conditions.items():
+        st = _a4v2_stats(net, toks)
+        exc = _a4v2_knn_excess(st["width"], st["summary"],
+                               ref_stats["width"], ref_stats["summary"])
+        nov = _a4v2_novelty(st["pattern"], ref_stats["pattern"])
+        rows[name] = {
+            "n": len(toks),
+            "mean_width": float(st["width"].mean()),
+            "mean_raw": float(st["raw"].mean()),
+            "mean_raw_noop": float(st["raw_noop"].mean()),
+            "knn_excess_mean": float(exc.mean()),
+            "knn_excess_median": float(np.median(exc)),
+            "novelty_bits_mean": float(nov.mean()),
+            "novelty_bits_p90": float(np.percentile(nov, 90)),
+            "widths": st["width"],
+        }
+    w_real = rows["real_heldout"]["widths"]
+    for name in conditions:
+        rows[name]["auroc_vs_real"] = (
+            0.5 if name == "real_heldout"
+            else _a4v2_auroc(w_real, rows[name]["widths"]))
+        rows[name]["width_x_real"] = (rows[name]["mean_width"]
+                                      / max(1e-9, float(w_real.mean())))
+
+    print(f"\n  in-range width-vs-norm slope (reference pool, "
+          f"Spearman): {slope if slope is None else round(slope, 3)}")
+    hdr = (f"  {'condition':<15} {'n':>4} {'width':>8} {'x_real':>7} "
+           f"{'kNN-exc':>8} {'(med)':>7} {'nov.bits':>9} {'AUROC':>6} "
+           f"{'raw':>8} {'raw_noop':>9}")
+    print(hdr)
+    for name in ("real_heldout", "aircraft_swap", "box_garbage",
+                 "shuffled_field"):
+        r = rows[name]
+        print(f"  {name:<15} {r['n']:>4} {r['mean_width']:>8.3f} "
+              f"{r['width_x_real']:>7.2f} {r['knn_excess_mean']:>8.2f} "
+              f"{r['knn_excess_median']:>7.2f} "
+              f"{r['novelty_bits_mean']:>9.1f} {r['auroc_vs_real']:>6.3f} "
+              f"{r['mean_raw']:>8.2f} {r['mean_raw_noop']:>9.2f}")
+
+    # ---- width-pressure ladder on FROZEN probe states -----------------
+    m = re.match(r"(.*)_(ep\d+|final)\.pt$", os.path.basename(path))
+    stem = m.group(1) if m else None
+    ladder_ckpts = []
+    if stem:
+        for p in glob.glob(os.path.join(CHECKPOINT_DIR, stem + "_ep*.pt")):
+            em = re.search(r"_ep(\d+)\.pt$", p)
+            if em:
+                ladder_ckpts.append((int(em.group(1)), p))
+        ladder_ckpts.sort()
+    if len(ladder_ckpts) > 30:   # subsample (keep first + every 4th + last)
+        keep = set(range(0, len(ladder_ckpts), 4)) | {len(ladder_ckpts) - 1}
+        ladder_ckpts = [c for i, c in enumerate(ladder_ckpts) if i in keep]
+
+    n_frozen = min(200, len(held))
+    frozen_meta = None
+    if (not quick) and os.path.exists(A4V2_FROZEN_NPZ):
+        z = np.load(A4V2_FROZEN_NPZ, allow_pickle=False)
+        n_real = int(z["n_real"])
+        n_garb = int(z["n_garb"])
+        frozen_real = [z[f"real_{i}"] for i in range(n_real)]
+        frozen_garb = [z[f"garb_{i}"] for i in range(n_garb)]
+        frozen_meta = str(z["meta"])
+        print(f"\n  [frozen] reusing {A4V2_FROZEN_NPZ} "
+              f"({n_real} real + {n_garb} garbage states; {frozen_meta})")
+    else:
+        frozen_real = held[:n_frozen]
+        frozen_garb = [make_garbage(t) for t in held[:n_frozen]]
+        if not quick:
+            frozen_meta = (f"created {time.strftime('%F %T')} from "
+                           f"{os.path.basename(path)} on-policy rollout "
+                           f"seeds {seeds_used}")
+            np.savez(A4V2_FROZEN_NPZ,
+                     meta=np.str_(frozen_meta),
+                     n_real=len(frozen_real), n_garb=len(frozen_garb),
+                     **{f"real_{i}": t for i, t in enumerate(frozen_real)},
+                     **{f"garb_{i}": t for i, t in enumerate(frozen_garb)})
+            print(f"\n  [frozen] probe-state set SAVED to "
+                  f"{A4V2_FROZEN_NPZ} ({len(frozen_real)} real + "
+                  f"{len(frozen_garb)} garbage) — later milestone runs "
+                  f"reuse the SAME states")
+    if quick and len(ladder_ckpts) > 2:
+        ladder_ckpts = [ladder_ckpts[0], ladder_ckpts[-1]]
+
+    print(f"\n  WIDTH-PRESSURE LADDER (frozen states; delta_raw = mean "
+          f"pre-softplus over valid candidates, incl. width_scalars "
+          f"channel when trained with it)")
+    print(f"  {'ep':>5} {'w_real':>8} {'raw_real':>9} {'w_garb':>8} "
+          f"{'raw_garb':>9} {'garb/real_w':>12}")
+    ladder = []
+    for ep_no, p in ladder_ckpts:
+        ag_i, _ck = load_agent(p, device="cpu")
+        sr = _a4v2_stats(ag_i.q_net, frozen_real)
+        sg = _a4v2_stats(ag_i.q_net, frozen_garb)
+        row = {"episode": ep_no,
+               "w_real": float(sr["width"].mean()),
+               "raw_real": float(sr["raw"].mean()),
+               "raw_noop_real": float(sr["raw_noop"].mean()),
+               "w_garbage": float(sg["width"].mean()),
+               "raw_garbage": float(sg["raw"].mean()),
+               "raw_noop_garbage": float(sg["raw_noop"].mean())}
+        ladder.append(row)
+        print(f"  {ep_no:>5} {row['w_real']:>8.3f} {row['raw_real']:>9.2f} "
+              f"{row['w_garbage']:>8.3f} {row['raw_garbage']:>9.2f} "
+              f"{row['w_garbage'] / max(1e-9, row['w_real']):>12.2f}")
+
+    # ---- verdict -------------------------------------------------------
+    held_exc = rows["real_heldout"]["knn_excess_mean"]
+    swap_exc = rows["aircraft_swap"]["knn_excess_mean"]
+    garb_exc = rows["box_garbage"]["knn_excess_mean"]
+    shuf_exc = rows["shuffled_field"]["knn_excess_mean"]
+    sanity_ok = 0.8 <= held_exc <= 1.25
+    swap_elev = swap_exc >= 1.2
+    no_collapse = garb_exc >= 1.0 and shuf_exc >= 1.0
+    if not sanity_ok:
+        verdict = "MISS"
+    else:
+        verdict = "MEET" if (swap_elev and no_collapse) else (
+            "PARTIAL" if (swap_elev or no_collapse) else "MISS")
+    raw_trend = ("n/a" if len(ladder) < 2 else
+                 f"raw_garb {ladder[0]['raw_garbage']:.2f} (ep"
+                 f"{ladder[0]['episode']}) -> "
+                 f"{ladder[-1]['raw_garbage']:.2f} (ep"
+                 f"{ladder[-1]['episode']}), raw_real "
+                 f"{ladder[0]['raw_real']:.2f} -> "
+                 f"{ladder[-1]['raw_real']:.2f}")
+    result = (f"sanity(held-out kNN-excess)={held_exc:.2f} "
+              f"({'OK' if sanity_ok else 'BROKEN INSTRUMENT'}); "
+              f"aircraft-swap excess={swap_exc:.2f} "
+              f"(novelty {rows['aircraft_swap']['novelty_bits_mean']:.1f} "
+              f"bits, AUROC {rows['aircraft_swap']['auroc_vs_real']:.3f}); "
+              f"garbage excess={garb_exc:.2f}, shuffled-field excess="
+              f"{shuf_exc:.2f} (floor >= 1.0 "
+              f"{'held' if no_collapse else 'BROKEN — certain-basin'}); "
+              f"in-range slope={slope if slope is None else round(slope, 3)}"
+              f"; ladder (finding): {raw_trend}")
+    print(f"\nRESULT: {result}\nVERDICT: {verdict}")
+    for name in rows:
+        rows[name].pop("widths")
+    return {"probe": "a4v2", "expectation": EXPECT["a4v2"],
+            "result": result, "verdict": verdict,
+            "detail": {"ckpt": os.path.basename(path),
+                       "episode": ckpt.get("episode"),
+                       "quick": quick,
+                       "policy": f"greedy c={agent.c_train} + reissue mask",
+                       "n_states_collected": len(states),
+                       "n_reference": len(ref), "n_heldout": len(held),
+                       "seeds_used": seeds_used,
+                       "knn_k": A4V2_KNN_K,
+                       "pattern_pooling": "masked mean over aircraft of "
+                                          "(ReLU>0), majority (>0.5)",
+                       "in_range_width_norm_spearman": slope,
+                       "conditions": rows,
+                       "frozen_npz": None if quick else A4V2_FROZEN_NPZ,
+                       "frozen_meta": frozen_meta,
+                       "ladder": ladder}}
+
+
 def probe_c2(args):
     n_states = args.c2_states
     H = 15
@@ -2561,8 +2965,9 @@ def probe_c3(args):
 
 PROBES = {"b1": probe_b1, "b2": probe_b2, "b3": probe_b3, "b4": probe_b4,
           "a1": probe_a1, "a2": probe_a2, "a3": probe_a3, "a4": probe_a4,
-          "c2": probe_c2, "c3": probe_c3}
-ORDER = ["b1", "b2", "b3", "b4", "a1", "a2", "a3", "a4", "c2", "c3"]
+          "a4v2": probe_a4v2, "c2": probe_c2, "c3": probe_c3}
+ORDER = ["b1", "b2", "b3", "b4", "a1", "a2", "a3", "a4", "a4v2", "c2",
+         "c3"]
 
 
 def to_jsonable(x):
@@ -2585,11 +2990,14 @@ def main():
     ap.add_argument("--probe", nargs="+", required=True,
                     choices=ORDER + ["all", "env", "ckpt"],
                     help="probe selectors; 'env'=b1 b2 b3 b4, "
-                         "'ckpt'=a1 a2 a3 a4 c2")
+                         "'ckpt'=a1 a2 a3 a4 a4v2 c2")
     ap.add_argument("--ckpt", type=str, default=None,
                     help="checkpoint for [CKPT] probes (default: latest)")
     ap.add_argument("--b3_states", type=int, default=50)
     ap.add_argument("--c2_states", type=int, default=20)
+    ap.add_argument("--a4v2_quick", action="store_true",
+                    help="a4v2 selftest-lite: few states, 2-point ladder, "
+                         "frozen probe-state file untouched")
     args = ap.parse_args()
     sel = []
     for p in args.probe:
@@ -2598,7 +3006,7 @@ def main():
         elif p == "env":
             sel += ["b1", "b2", "b3", "b4"]
         elif p == "ckpt":
-            sel += ["a1", "a2", "a3", "a4", "c2"]
+            sel += ["a1", "a2", "a3", "a4", "a4v2", "c2"]
         else:
             sel.append(p)
     sel = [p for i, p in enumerate(sel) if p not in sel[:i]]
@@ -2633,7 +3041,7 @@ def main():
             print(f"  {p.upper()}: {msg}")
 
     os.makedirs(DIAG_DIR, exist_ok=True)
-    tag = "b1v2_" if "b1" in sel else ""
+    tag = "b1v2_" if "b1" in sel else ("a4v2_" if "a4v2" in sel else "")
     out = os.path.join(
         DIAG_DIR,
         f"probe_battery_{tag}{time.strftime('%Y%m%d_%H%M%S')}.json")
