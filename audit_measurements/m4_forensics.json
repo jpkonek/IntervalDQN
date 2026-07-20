@@ -1,0 +1,786 @@
+{
+ "summary_file": "checkpoints/micro_battery/m4/m4_summary_seed134_20260719_230841.json",
+ "jsonl_file": "checkpoints/micro_battery/m4/m4_seed134_20260719_210020.jsonl",
+ "deviation": "no M4 .pt checkpoint exists (train_arm passes rho_fn=None; run_training_arm only saves checkpoints on rho evaluations) \u2014 evidence is extracted from recorded outputs, nothing net-side recomputed",
+ "oracle": {
+  "acceptable": [
+   "AIR-00",
+   "AIR-01"
+  ],
+  "through": [
+   "AIR-02"
+  ],
+  "through_gap": 50.0177,
+  "noop_G": -50.0,
+  "best": {
+   "AIR-00": {
+    "G": -0.0799,
+    "how": [
+     "climb10",
+     60,
+     true
+    ]
+   },
+   "AIR-01": {
+    "G": -0.0799,
+    "how": [
+     "climb10",
+     60,
+     true
+    ]
+   },
+   "AIR-02": {
+    "G": -50.0976,
+    "how": [
+     "L10",
+     56,
+     false
+    ]
+   }
+  }
+ },
+ "greedy_eval": {
+  "G": -5.9859,
+  "commands": 60,
+  "violated": false,
+  "first_command": {
+   "ordinal": 1,
+   "step": 0,
+   "sim_s": 0,
+   "cand_idx": 4,
+   "aircraft": "AIR-00",
+   "instr": "climb10",
+   "class": "acceptable"
+  },
+  "first_through_command": {
+   "ordinal": 3,
+   "step": 2,
+   "sim_s": 12,
+   "instr": "L10"
+  },
+  "commands_per_aircraft": {
+   "AIR-00": 33,
+   "AIR-01": 17,
+   "AIR-02": 10
+  },
+  "n_through_commands": 10,
+  "command_list": [
+   {
+    "ordinal": 1,
+    "step": 0,
+    "sim_s": 0,
+    "cand_idx": 4,
+    "aircraft": "AIR-00",
+    "instr": "climb10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 2,
+    "step": 1,
+    "sim_s": 6,
+    "cand_idx": 7,
+    "aircraft": "AIR-01",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 3,
+    "step": 2,
+    "sim_s": 12,
+    "cand_idx": 11,
+    "aircraft": "AIR-02",
+    "instr": "L10",
+    "class": "through"
+   },
+   {
+    "ordinal": 4,
+    "step": 3,
+    "sim_s": 18,
+    "cand_idx": 6,
+    "aircraft": "AIR-01",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 5,
+    "step": 4,
+    "sim_s": 24,
+    "cand_idx": 9,
+    "aircraft": "AIR-01",
+    "instr": "climb10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 6,
+    "step": 5,
+    "sim_s": 30,
+    "cand_idx": 8,
+    "aircraft": "AIR-01",
+    "instr": "route_parallel",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 7,
+    "step": 6,
+    "sim_s": 36,
+    "cand_idx": 9,
+    "aircraft": "AIR-01",
+    "instr": "climb10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 8,
+    "step": 7,
+    "sim_s": 42,
+    "cand_idx": 10,
+    "aircraft": "AIR-01",
+    "instr": "descend10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 9,
+    "step": 8,
+    "sim_s": 48,
+    "cand_idx": 9,
+    "aircraft": "AIR-01",
+    "instr": "climb10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 10,
+    "step": 9,
+    "sim_s": 54,
+    "cand_idx": 8,
+    "aircraft": "AIR-01",
+    "instr": "route_parallel",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 11,
+    "step": 10,
+    "sim_s": 60,
+    "cand_idx": 14,
+    "aircraft": "AIR-02",
+    "instr": "climb10",
+    "class": "through"
+   },
+   {
+    "ordinal": 12,
+    "step": 11,
+    "sim_s": 66,
+    "cand_idx": 5,
+    "aircraft": "AIR-00",
+    "instr": "descend10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 13,
+    "step": 17,
+    "sim_s": 102,
+    "cand_idx": 9,
+    "aircraft": "AIR-01",
+    "instr": "climb10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 14,
+    "step": 33,
+    "sim_s": 198,
+    "cand_idx": 4,
+    "aircraft": "AIR-00",
+    "instr": "climb10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 15,
+    "step": 36,
+    "sim_s": 216,
+    "cand_idx": 1,
+    "aircraft": "AIR-00",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 16,
+    "step": 37,
+    "sim_s": 222,
+    "cand_idx": 4,
+    "aircraft": "AIR-00",
+    "instr": "climb10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 17,
+    "step": 38,
+    "sim_s": 228,
+    "cand_idx": 3,
+    "aircraft": "AIR-00",
+    "instr": "route_parallel",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 18,
+    "step": 45,
+    "sim_s": 270,
+    "cand_idx": 1,
+    "aircraft": "AIR-00",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 19,
+    "step": 46,
+    "sim_s": 276,
+    "cand_idx": 6,
+    "aircraft": "AIR-01",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 20,
+    "step": 47,
+    "sim_s": 282,
+    "cand_idx": 4,
+    "aircraft": "AIR-00",
+    "instr": "climb10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 21,
+    "step": 49,
+    "sim_s": 294,
+    "cand_idx": 7,
+    "aircraft": "AIR-01",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 22,
+    "step": 50,
+    "sim_s": 300,
+    "cand_idx": 6,
+    "aircraft": "AIR-01",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 23,
+    "step": 51,
+    "sim_s": 306,
+    "cand_idx": 2,
+    "aircraft": "AIR-00",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 24,
+    "step": 52,
+    "sim_s": 312,
+    "cand_idx": 1,
+    "aircraft": "AIR-00",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 25,
+    "step": 53,
+    "sim_s": 318,
+    "cand_idx": 2,
+    "aircraft": "AIR-00",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 26,
+    "step": 54,
+    "sim_s": 324,
+    "cand_idx": 1,
+    "aircraft": "AIR-00",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 27,
+    "step": 55,
+    "sim_s": 330,
+    "cand_idx": 4,
+    "aircraft": "AIR-00",
+    "instr": "climb10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 28,
+    "step": 56,
+    "sim_s": 336,
+    "cand_idx": 2,
+    "aircraft": "AIR-00",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 29,
+    "step": 57,
+    "sim_s": 342,
+    "cand_idx": 4,
+    "aircraft": "AIR-00",
+    "instr": "climb10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 30,
+    "step": 58,
+    "sim_s": 348,
+    "cand_idx": 12,
+    "aircraft": "AIR-02",
+    "instr": "R10",
+    "class": "through"
+   },
+   {
+    "ordinal": 31,
+    "step": 60,
+    "sim_s": 360,
+    "cand_idx": 2,
+    "aircraft": "AIR-00",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 32,
+    "step": 61,
+    "sim_s": 366,
+    "cand_idx": 5,
+    "aircraft": "AIR-00",
+    "instr": "descend10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 33,
+    "step": 62,
+    "sim_s": 372,
+    "cand_idx": 3,
+    "aircraft": "AIR-00",
+    "instr": "route_parallel",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 34,
+    "step": 63,
+    "sim_s": 378,
+    "cand_idx": 2,
+    "aircraft": "AIR-00",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 35,
+    "step": 64,
+    "sim_s": 384,
+    "cand_idx": 3,
+    "aircraft": "AIR-00",
+    "instr": "route_parallel",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 36,
+    "step": 69,
+    "sim_s": 414,
+    "cand_idx": 14,
+    "aircraft": "AIR-02",
+    "instr": "climb10",
+    "class": "through"
+   },
+   {
+    "ordinal": 37,
+    "step": 70,
+    "sim_s": 420,
+    "cand_idx": 5,
+    "aircraft": "AIR-00",
+    "instr": "descend10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 38,
+    "step": 71,
+    "sim_s": 426,
+    "cand_idx": 10,
+    "aircraft": "AIR-01",
+    "instr": "descend10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 39,
+    "step": 72,
+    "sim_s": 432,
+    "cand_idx": 3,
+    "aircraft": "AIR-00",
+    "instr": "route_parallel",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 40,
+    "step": 73,
+    "sim_s": 438,
+    "cand_idx": 8,
+    "aircraft": "AIR-01",
+    "instr": "route_parallel",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 41,
+    "step": 74,
+    "sim_s": 444,
+    "cand_idx": 5,
+    "aircraft": "AIR-00",
+    "instr": "descend10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 42,
+    "step": 75,
+    "sim_s": 450,
+    "cand_idx": 10,
+    "aircraft": "AIR-01",
+    "instr": "descend10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 43,
+    "step": 76,
+    "sim_s": 456,
+    "cand_idx": 3,
+    "aircraft": "AIR-00",
+    "instr": "route_parallel",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 44,
+    "step": 77,
+    "sim_s": 462,
+    "cand_idx": 5,
+    "aircraft": "AIR-00",
+    "instr": "descend10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 45,
+    "step": 78,
+    "sim_s": 468,
+    "cand_idx": 4,
+    "aircraft": "AIR-00",
+    "instr": "climb10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 46,
+    "step": 79,
+    "sim_s": 474,
+    "cand_idx": 5,
+    "aircraft": "AIR-00",
+    "instr": "descend10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 47,
+    "step": 80,
+    "sim_s": 480,
+    "cand_idx": 6,
+    "aircraft": "AIR-01",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 48,
+    "step": 81,
+    "sim_s": 486,
+    "cand_idx": 11,
+    "aircraft": "AIR-02",
+    "instr": "L10",
+    "class": "through"
+   },
+   {
+    "ordinal": 49,
+    "step": 82,
+    "sim_s": 492,
+    "cand_idx": 13,
+    "aircraft": "AIR-02",
+    "instr": "route_parallel",
+    "class": "through"
+   },
+   {
+    "ordinal": 50,
+    "step": 83,
+    "sim_s": 498,
+    "cand_idx": 15,
+    "aircraft": "AIR-02",
+    "instr": "descend10",
+    "class": "through"
+   },
+   {
+    "ordinal": 51,
+    "step": 87,
+    "sim_s": 522,
+    "cand_idx": 11,
+    "aircraft": "AIR-02",
+    "instr": "L10",
+    "class": "through"
+   },
+   {
+    "ordinal": 52,
+    "step": 88,
+    "sim_s": 528,
+    "cand_idx": 15,
+    "aircraft": "AIR-02",
+    "instr": "descend10",
+    "class": "through"
+   },
+   {
+    "ordinal": 53,
+    "step": 89,
+    "sim_s": 534,
+    "cand_idx": 12,
+    "aircraft": "AIR-02",
+    "instr": "R10",
+    "class": "through"
+   },
+   {
+    "ordinal": 54,
+    "step": 90,
+    "sim_s": 540,
+    "cand_idx": 2,
+    "aircraft": "AIR-00",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 55,
+    "step": 91,
+    "sim_s": 546,
+    "cand_idx": 1,
+    "aircraft": "AIR-00",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 56,
+    "step": 92,
+    "sim_s": 552,
+    "cand_idx": 2,
+    "aircraft": "AIR-00",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 57,
+    "step": 93,
+    "sim_s": 558,
+    "cand_idx": 3,
+    "aircraft": "AIR-00",
+    "instr": "route_parallel",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 58,
+    "step": 94,
+    "sim_s": 564,
+    "cand_idx": 2,
+    "aircraft": "AIR-00",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 59,
+    "step": 95,
+    "sim_s": 570,
+    "cand_idx": 4,
+    "aircraft": "AIR-00",
+    "instr": "climb10",
+    "class": "acceptable"
+   },
+   {
+    "ordinal": 60,
+    "step": 99,
+    "sim_s": 594,
+    "cand_idx": 9,
+    "aircraft": "AIR-01",
+    "instr": "climb10",
+    "class": "acceptable"
+   }
+  ]
+ },
+ "probe": {
+  "split": {
+   "noop": 0,
+   "acceptable": 12,
+   "through": 8,
+   "other": 0
+  },
+  "rows": [
+   {
+    "probe_step": 10,
+    "argmax_cand": 14,
+    "target": "AIR-02",
+    "instr": "climb10",
+    "class": "through"
+   },
+   {
+    "probe_step": 13,
+    "argmax_cand": 14,
+    "target": "AIR-02",
+    "instr": "climb10",
+    "class": "through"
+   },
+   {
+    "probe_step": 16,
+    "argmax_cand": 1,
+    "target": "AIR-00",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "probe_step": 19,
+    "argmax_cand": 1,
+    "target": "AIR-00",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "probe_step": 22,
+    "argmax_cand": 1,
+    "target": "AIR-00",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "probe_step": 25,
+    "argmax_cand": 11,
+    "target": "AIR-02",
+    "instr": "L10",
+    "class": "through"
+   },
+   {
+    "probe_step": 28,
+    "argmax_cand": 11,
+    "target": "AIR-02",
+    "instr": "L10",
+    "class": "through"
+   },
+   {
+    "probe_step": 31,
+    "argmax_cand": 11,
+    "target": "AIR-02",
+    "instr": "L10",
+    "class": "through"
+   },
+   {
+    "probe_step": 34,
+    "argmax_cand": 11,
+    "target": "AIR-02",
+    "instr": "L10",
+    "class": "through"
+   },
+   {
+    "probe_step": 37,
+    "argmax_cand": 11,
+    "target": "AIR-02",
+    "instr": "L10",
+    "class": "through"
+   },
+   {
+    "probe_step": 40,
+    "argmax_cand": 2,
+    "target": "AIR-00",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "probe_step": 43,
+    "argmax_cand": 1,
+    "target": "AIR-00",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "probe_step": 46,
+    "argmax_cand": 6,
+    "target": "AIR-01",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "probe_step": 49,
+    "argmax_cand": 6,
+    "target": "AIR-01",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "probe_step": 52,
+    "argmax_cand": 2,
+    "target": "AIR-00",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "probe_step": 55,
+    "argmax_cand": 7,
+    "target": "AIR-01",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "probe_step": 58,
+    "argmax_cand": 7,
+    "target": "AIR-01",
+    "instr": "R10",
+    "class": "acceptable"
+   },
+   {
+    "probe_step": 61,
+    "argmax_cand": 6,
+    "target": "AIR-01",
+    "instr": "L10",
+    "class": "acceptable"
+   },
+   {
+    "probe_step": 64,
+    "argmax_cand": 9,
+    "target": "AIR-01",
+    "instr": "climb10",
+    "class": "acceptable"
+   },
+   {
+    "probe_step": 67,
+    "argmax_cand": 13,
+    "target": "AIR-02",
+    "instr": "route_parallel",
+    "class": "through"
+   }
+  ],
+  "n_through_argmax": 8,
+  "n_states": 20
+ },
+ "bars_as_scored": {
+  "b1_first_cmd": true,
+  "b2_cmd_count": false,
+  "b3_probe_through": false,
+  "hard_miss": false
+ },
+ "training_first_command": {
+  "n_episodes": 600,
+  "first_target_counts": {
+   "AIR-00": 174,
+   "AIR-01": 317,
+   "AIR-02": 109,
+   "none": 0
+  },
+  "acceptable_first_rate_all": 0.8183,
+  "first_target_counts_last200": {
+   "AIR-00": 28,
+   "AIR-01": 101,
+   "AIR-02": 71,
+   "none": 0
+  },
+  "acceptable_first_rate_last200": 0.645,
+  "note": "b1 as written is ONE draw from roughly this Bernoulli rate \u2014 the chance-level context for the green first-command bar"
+ }
+}

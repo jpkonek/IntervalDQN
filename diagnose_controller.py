@@ -71,11 +71,19 @@ import torch
 import bluebird_controller_dqn as bcd
 from bluebird_controller_dqn import (
     GAMMA, EPS_FUEL, CMD_COST, DELIVERY_BONUS, VIOLATION_PENALTY,
-    CONFLICT_FL, CONFLICT_RANGE_NM, CHECKPOINT_DIR, N_INSTR,
+    CONFLICT_FL, CONFLICT_RANGE_NM, CHECKPOINT_DIR, N_INSTR, INSTR_NAMES,
     make_controller_env, build_tokens, sector_snapshot, shaping_terms,
     snapshot_stratum, candidate_intervals, load_agent, run_episode,
     pad_state_batch,
 )
+# N_INSTR is 5 since the 2026-07-13 vertical-action extension (L10, R10,
+# route_parallel, climb +10 FL, descend -10 FL; env actions 1..5).
+# DECODING RULE ADOPTED THROUGHOUT: candidate indices produced by a
+# LOADED agent are decoded with that agent's OWN n_instr (persisted in
+# the checkpoint — 3 for pre-vertical nets), never the module constant;
+# candidate ENUMERATION for env-side oracles uses the module N_INSTR
+# (the env's actual instruction set). Scripted policies that hardcode
+# env action ints 1/2/3 stay valid: heading actions kept their ints.
 from bluebird_interval_dqn import detect_violation, haversine_nm, SEC_PER_STEP
 
 sys.stdout.reconfigure(line_buffering=True)
@@ -98,10 +106,14 @@ EXPECT = {
            "DELIVERER > NOOP at STANDARD density is reported, NOT "
            "gated (capability question). Any gated pair misordered => "
            "objective wrong, run-12b must not launch."),
-    "b2": ("(post-CBP training signal) Myopic oracle produces plausible "
-           "(boring) control, NOT a degenerate high scorer; return lands "
-           "between NOOP and DELIVERER. Exit-window scripts (park short / "
-           "oscillate) must not out-score completing the delivery."),
+    "b2": ("(post-CBP training signal; RE-REGISTERED 18 Jul 2026, JK-"
+           "approved, for smooth pricing where correct clearances are net-"
+           "positive at issuance) Myopic oracle must NOT be a degenerate "
+           "high scorer: it may exceed the NOOP..DELIVERER band top by at "
+           "most its ONE-SHOT honest shaping budget (n_commands x max "
+           "single-pair p1); repeatable do-nothing-beating income is still "
+           "an exploit. Exit-window scripts (park short / oscillate) must "
+           "not out-score completing the delivery."),
     "b3": ("(post-CBP TRAINING-signal deltas, not raw objective) Top-"
            "candidate H-step (H=10) |delta| EX-FEE distinguishable from "
            "ambient per-step training-reward noise for states with "
@@ -317,14 +329,42 @@ class Deliverer:
           clearance budget is free).
       (b) AVOID: while a vertically-proximate pair (|dFL| < 20) has
           lateral distance < 20 nm AND is closing (distance strictly
-          decreased since the previous step), issue L10 to the GIVE-WAY
-          member EVERY step the budget allows (escalating turn: heading
-          commands are relative, so repeated L10s accumulate) until the
-          pair stops closing. The give-way member is chosen once per
-          conflict episode and kept sticky, EXCEPT that a member within
-          8 nm of the sector boundary never gives way (turning it
-          further would trade the LoS for a sector excursion —
-          measured): the other member takes over.
+          decreased since the previous step), resolve via the GIVE-WAY
+          member. VERTICAL-FIRST RULE (2026-07-13; FL-BAND FIX
+          2026-07-13b, documented): a conflict action goes out ONLY if
+          the pair's ACTUAL |dFL| < 10 (the LoS band — a pair with the
+          vertical gap already open cannot LoS and gets NO command;
+          re-checked every step, so a later gap collapse re-arms the
+          rule). The resolution is ONE vertical move per conflict
+          episode, chosen deterministically as the first of [give-way
+          climb, give-way descend, other climb, other descend] that
+          BOTH (1) keeps the target INSIDE the sector's vertical band
+          (min_fl..max_fl read from the env's own sector volumes,
+          FL200-300 on X-Plus; the pre-fix oracle climbed a FL300
+          aircraft to FL302 -> OUT_SECTOR sector_excursion at 414 s on
+          seed 10043 — the measured B1-v2 regression, counterfactually
+          isolated: NOOP/RP/L10 at the same step all stay clean) and
+          (2) OPENS the vertical gap to >= 10 FL (a give-way descend
+          onto the other member's level is never issued). +-10 FL costs
+          one fee and does NOT jeopardize delivery (EXIT_REACHED is not
+          FL-enforced in this env version). While the move is taking
+          effect the budget is released to lower priorities; the moved
+          aircraft stays laterally ON-ROUTE, so no recovery pass is
+          needed for it. If NO in-band gap-opening vertical move exists
+          for either member, the episode is LATERAL-ONLY: old-style
+          escalating L10s to the give-way member from the start (which
+          feed (c) recovery). LATERAL ESCALATION: if |dFL| is still
+          < 10 and the estimated steps-to-LoS (d - 5 nm)/closure_rate
+          drops below the steps still needed to open 10 FL vertically
+          at a conservative CLIMB_FL_PER_STEP (1 FL/step ~ 1000 fpm at
+          6 s/step), fall back to the old escalating L10s (relative
+          heading commands accumulate) until the pair stops closing.
+          The give-way member is chosen once per conflict episode and
+          kept sticky, EXCEPT that a member within 8 nm of the sector
+          boundary never gives way (turning it further would trade the
+          LoS for a sector excursion — measured): the other member
+          takes over (the boundary veto only matters for the lateral
+          path; vertical moves do not turn anyone).
           DOCUMENTED DEVIATION from the sketch parameters ("< 12 nm,
           L10 once per pair per 10 steps"): those are geometrically
           incapable — measured on seed 10043, the violating pair closes
@@ -363,6 +403,13 @@ class Deliverer:
     FWD_GUARD_NM = 12.0         # forward polygon distance (emergency)
     RETRIM_OFFSET_NM = 3.0
     RETRIM_PERIOD = 10
+    CLIMB_ACTION = 4            # env int: simple_fl_climb (+10 FL)
+    DESCEND_ACTION = 5          # env int: simple_fl_descent (-10 FL)
+    FL_STEP = 10.0              # magnitude of one vertical clearance
+    LOS_FL = 10.0               # LoS vertical band (detect_violation)
+    CLIMB_FL_PER_STEP = 1.0     # conservative climb rate for escalation
+                                # (~1000 fpm at 6 s/step; see docstring)
+    FL_BAND_FALLBACK = (200.0, 300.0)   # X-Plus sector band (measured)
 
     def __init__(self):
         self.seen = set()
@@ -370,7 +417,10 @@ class Deliverer:
         self.deviated = set()       # aircraft turned off-route by (b)
         self.prev_d = {}            # pair -> lateral distance last step
         self.giveway = {}           # pair -> sticky give-way member
+        self.climb_step = {}        # pair -> step the vertical move went out
+        self.lateral_only = set()   # pairs with no legal vertical move
         self.last_retrim = {}       # cs -> step of last (d) clearance
+        self._fl_band_cache = None  # (min_fl, max_fl) of the sector
         self.t = 0
 
     @staticmethod
@@ -389,6 +439,45 @@ class Deliverer:
         if b_right and not a_right:
             return b
         return min(a, b)
+
+    def _fl_band(self, env):
+        """Sector vertical band (min_fl, max_fl), read once from the
+        env's OWN sector volumes (the authority pos_status uses: an
+        aircraft outside the band goes OUT_SECTOR = sector_excursion).
+        X-Plus is FL200-300; the constant fallback covers exotic envs."""
+        if self._fl_band_cache is None:
+            try:
+                sim = env.get_simulator_env()
+                sec = sim.airspace.sectors[env.active_airspace_sector]
+                lo = min(float(v.min_fl) for v in sec.volumes)
+                hi = max(float(v.max_fl) for v in sec.volumes)
+                self._fl_band_cache = (lo, hi)
+            except Exception:
+                self._fl_band_cache = self.FL_BAND_FALLBACK
+        return self._fl_band_cache
+
+    def _vertical_move(self, env, ins, give, other):
+        """First in-band, gap-opening vertical clearance in the fixed
+        preference order give-climb, give-descend, other-climb,
+        other-descend (see class docstring). Guards (FL-BAND FIX):
+        (1) target FL stays inside the sector band — FLs are read at
+        decision time, so a mid-climb aircraft is guarded at its
+        CURRENT level and repeated climbs cannot ratchet it over the
+        ceiling; (2) the resulting |dFL| is >= LOS_FL and strictly
+        larger than now. Returns (callsign, env_action) or None."""
+        lo, hi = self._fl_band(env)
+        for cs, partner in ((give, other), (other, give)):
+            fl = ins[cs].flight_level
+            pfl = ins[partner].flight_level
+            for act, dfl_cmd in ((self.CLIMB_ACTION, self.FL_STEP),
+                                 (self.DESCEND_ACTION, -self.FL_STEP)):
+                new_fl = fl + dfl_cmd
+                if not (lo <= new_fl <= hi):
+                    continue
+                if abs(new_fl - pfl) >= self.LOS_FL \
+                        and abs(new_fl - pfl) > abs(fl - pfl):
+                    return cs, act
+        return None
 
     @staticmethod
     def _boundary_dist_nm(env, td):
@@ -474,26 +563,60 @@ class Deliverer:
                         best = (urgency, a, b)
                 elif key in self.giveway and not closing[key]:
                     self.giveway.pop(key, None)   # conflict episode over
+                    self.climb_step.pop(key, None)
+                    self.lateral_only.discard(key)
         if best is not None:
-            _, a, b = best
+            urgency, a, b = best
             key = (a, b)
-            give = self.giveway.get(key)
-            if give is None or give not in ins:
-                give = self._give_way(a, b, ins[a], ins[b])
-            # boundary override: never turn a member that is close to
-            # the boundary; the other member takes over (if it, too, is
-            # boundary-pinned, keep the original choice)
-            other = b if give == a else a
-            if self._boundary_dist_nm(env, ins[give]) \
-                    < self.BOUNDARY_GUARD_NM and \
-                    self._boundary_dist_nm(env, ins[other]) \
-                    >= self.BOUNDARY_GUARD_NM:
-                give = other
-            self.giveway[key] = give
-            self.deviated.add(give)
-            if give in self.rp_queue:
-                self.rp_queue.remove(give)   # (c) will re-route it
-            return give, 1                   # L10, turn away
+            # FL-BAND FIX (2026-07-13b): a pair whose vertical gap is
+            # already open (|dFL| >= 10) cannot LoS and gets NO command
+            # — the pre-fix rule climbed such pairs anyway, ratcheting
+            # aircraft into the sector ceiling (measured on both gate
+            # seeds). Re-checked every step: a later gap collapse
+            # re-enters here with dfl < 10 and full vertical-first
+            # treatment.
+            dfl = abs(ins[a].flight_level - ins[b].flight_level)
+            if dfl >= self.LOS_FL and key not in self.climb_step:
+                pass                             # release the budget
+            else:
+                give = self.giveway.get(key)
+                if give is None or give not in ins:
+                    give = self._give_way(a, b, ins[a], ins[b])
+                # boundary override: never turn a member that is close
+                # to the boundary; the other member takes over (if it,
+                # too, is boundary-pinned, keep the original choice)
+                other = b if give == a else a
+                if self._boundary_dist_nm(env, ins[give]) \
+                        < self.BOUNDARY_GUARD_NM and \
+                        self._boundary_dist_nm(env, ins[other]) \
+                        >= self.BOUNDARY_GUARD_NM:
+                    give = other
+                self.giveway[key] = give
+                # VERTICAL-FIRST GIVE-WAY (2026-07-13; FL-BAND FIX
+                # 2026-07-13b; see class docstring): one in-band,
+                # gap-opening vertical move per conflict episode, then
+                # wait for it to open the vertical gap; escalate
+                # laterally if no legal vertical move exists or if
+                # lateral LoS is projected BEFORE the vertical band
+                # clears at the conservative climb rate.
+                if key not in self.climb_step:
+                    mv = self._vertical_move(env, ins, give, other)
+                    if mv is not None:
+                        self.climb_step[key] = self.t
+                        return mv                # vertical give-way
+                    self.lateral_only.add(key)   # no legal vertical move
+                    self.climb_step[key] = self.t
+                escalate = key in self.lateral_only
+                if not escalate and dfl < self.LOS_FL:
+                    steps_to_clear = (self.LOS_FL - dfl) \
+                        / self.CLIMB_FL_PER_STEP
+                    escalate = urgency < steps_to_clear
+                if escalate:
+                    self.deviated.add(give)
+                    if give in self.rp_queue:
+                        self.rp_queue.remove(give)  # (c) re-routes it
+                    return give, 1               # L10 lateral escalation
+            # vertical gap open or opening in time: release the budget
 
         # (c) recovery: re-issue route_parallel once the conflict clears
         for cs in sorted(self.deviated):
@@ -627,12 +750,13 @@ class Oscillator:
         return target, 1 if self.t % 2 == 0 else 2
 
 
-def run_scripted(env, policy, seed, cbp=False):
+def run_scripted(env, policy, seed, cbp=False, step_hook=None):
     """Scripted policy through THE system's run_episode (train=False).
     cbp=True prices the episode with the CBP training signal (bcd's own
-    cbp path, not a copy)."""
+    cbp path, not a copy). step_hook passes through to run_episode
+    (per-step pricing internals; the micro reward audit reads them)."""
     return run_episode(env, ScriptedShim(policy), seed=seed, train=False,
-                       cbp=cbp)
+                       cbp=cbp, step_hook=step_hook)
 
 
 _MIRROR_OK = False
@@ -726,10 +850,14 @@ def noop_action(obs):
     return {cs: 0 for cs in obs}
 
 
-def conflict_ranked_candidates(snap, max_aircraft=4):
-    """NOOP + 3 instructions for the `max_aircraft` IN_SECTOR aircraft
-    nearest to a conflict (min pairwise distance among vertically-
-    proximate pairs; aircraft with no such partner rank last)."""
+def conflict_ranked_candidates(snap, max_aircraft=4, n_instr=N_INSTR):
+    """NOOP + all n_instr instructions for the `max_aircraft` IN_SECTOR
+    aircraft nearest to a conflict (min pairwise distance among
+    vertically-proximate pairs; aircraft with no such partner rank last).
+    Enumerates the env's FULL instruction set (since 2026-07-13 that
+    includes climb/descent, so B2/B3 oracles now consider vertical
+    resolutions too — a deliberate semantic extension, flagged in the
+    probe notes)."""
     css = sorted(snap.keys())
     prox = {}
     for cs in css:
@@ -746,7 +874,7 @@ def conflict_ranked_candidates(snap, max_aircraft=4):
     ranked = sorted(css, key=lambda cs: (prox[cs], cs))[:max_aircraft]
     cands = [(None, 0)]
     for cs in ranked:
-        for j in (1, 2, 3):
+        for j in range(1, n_instr + 1):
             cands.append((cs, j))
     return cands
 
@@ -829,9 +957,13 @@ def make_custom_density_env(duration, initial_spawn_rate, max_spawn_rate,
     cfg = CustomInfiniteEnv.get_default_env_config()
     cfg.state_repr_config = {"encoder_cls": "relative",
                              "k_nearest_aircraft": 3}
+    # mirrors make_controller_env's action_config EXACTLY, including the
+    # 2026-07-13 vertical actions (insertion order fixes env ints 1..5)
     cfg.action_config = {"simple_heading_left": [10],
                          "simple_heading_right": [10],
-                         "simple_heading_route_parallel": True}
+                         "simple_heading_route_parallel": True,
+                         "simple_fl_climb": [10],
+                         "simple_fl_descent": [10]}
     cfg.reward_config = {"fns": ["position_status_const"], "coeffs": [0.0]}
     cfg.scenario_config["scenario_name"] = ScenarioName.sector_xplus
     cfg.view_config["type"] = "decentralized"
@@ -1581,7 +1713,8 @@ def probe_b2(args):
                           env.config.scenario_duration // SEC_PER_STEP))
     snap = sector_snapshot(env, obs.keys())
     G, ncmd, ndel = 0.0, 0, 0
-    picks = {"NOOP": 0, "L10": 0, "R10": 0, "route_parallel": 0}
+    pick_labels = ("NOOP",) + INSTR_NAMES     # index by env action int
+    picks = {name: 0 for name in pick_labels}
     violated, kind, steps = False, None, 0
     t0 = time.time()
     for step in range(maxstep):
@@ -1602,7 +1735,7 @@ def probe_b2(args):
         issued = cs is not None
         if issued:
             acts[cs] = j
-        picks[["NOOP", "L10", "R10", "route_parallel"][j if issued else 0]] += 1
+        picks[pick_labels[j if issued else 0]] += 1
         out = sector_step_cbp(env, obs, snap, acts, issued)
         G += out["r"]
         ncmd += int(issued)
@@ -1612,7 +1745,8 @@ def probe_b2(args):
         if out["violated"]:
             violated, kind = True, out["kind"]
             break
-    print(f"  ORACLE(1-step, cap NOOP+12) seed={seed} 1200s | G={G:9.3f} | "
+    print(f"  ORACLE(1-step, cap NOOP+{4 * N_INSTR}) seed={seed} 1200s | "
+          f"G={G:9.3f} | "
           f"del={ndel} cmd={ncmd} | picks={picks} | "
           f"{'VIOLATION[' + str(kind) + ']@' + str(steps * SEC_PER_STEP) + 's' if violated else 'clean'}"
           f" | {time.time() - t0:.0f}s wall")
@@ -1632,7 +1766,17 @@ def probe_b2(args):
     lo = min(g_noop["ep_return"], g_del["ep_return"])
     hi = max(g_noop["ep_return"], g_del["ep_return"])
     within = (lo - TOL) <= G <= (hi + TOL)
-    no_exploit_oracle = G <= hi + TOL
+    # RE-REGISTERED 18 July 2026 (JK-approved): under smooth pricing at
+    # delta=0.5 a genuinely conflict-reducing clearance is net-positive AT
+    # ISSUANCE by design, so "nothing beats NOOP myopically" is stale. New
+    # bound: the oracle may exceed the band top by at most its ONE-SHOT
+    # honest shaping budget = n_commands x max single-pair p1
+    # (gamma * delta * max f_lat * max dg_vert = 0.97*DELTA*1.0*0.628).
+    # Repeatable income (exceeding the budget) is still an exploit.
+    import bluebird_controller_dqn as _bcd
+    p1_max = 0.97 * _bcd.DELTA_CONFLICT * 0.628
+    honest_budget = ncmd * p1_max
+    no_exploit_oracle = G <= hi + honest_budget + TOL
     deliver_best = max(g_park["ep_return"],
                        g_osc["ep_return"]) <= hi + TOL
     # exit-window scripts are VACUOUS if they never fired (no aircraft
@@ -1986,7 +2130,8 @@ def _ckpt_agent(args):
 def _agent_act_fn(agent, c):
     """Deployed-policy driver: includes re-issue masking (when the agent
     was trained with it) via a per-episode last_issued dict, exactly as
-    bcd.run_episode maintains it."""
+    bcd.run_episode maintains it. Candidate decode uses the AGENT'S OWN
+    n_instr (3 for pre-vertical checkpoints), never the module constant."""
     li = {}
 
     def act(env, obs, info):
@@ -1995,7 +2140,7 @@ def _agent_act_fn(agent, c):
                                              last_issued=li)
         idx = aux["cand_idx"]
         if idx != 0 and getattr(agent, "mask_reissue", False):
-            i, j = divmod(idx - 1, N_INSTR)
+            i, j = divmod(idx - 1, agent.n_instr)
             li[aux["callsigns"][i]] = j
         return actions, idx != 0
     return act
@@ -2041,7 +2186,7 @@ def probe_a1(args):
                                                      force_epsilon=0.0)
                 idx = aux["cand_idx"]
                 if idx != 0:
-                    i, j = divmod(idx - 1, N_INSTR)
+                    i, j = divmod(idx - 1, agent.n_instr)
                     cs = aux["callsigns"][i]
                     issued_total += 1
                     if active.get(cs) == j:
@@ -2147,11 +2292,12 @@ def probe_a2(args):
             keep = [k for k in range(N) if k != i]
             sc_i, _, _ = _hurwicz_scores(agent, toks[keep], 0.5)
             # align: NOOP + surviving aircraft in original order
+            n_in = agent.n_instr
             diffs = [abs(sc_i[0] - base_scores[0])]
             for new_pos, old_pos in enumerate(keep):
-                for j in range(N_INSTR):
-                    diffs.append(abs(sc_i[1 + 3 * new_pos + j]
-                                     - base_scores[1 + 3 * old_pos + j]))
+                for j in range(n_in):
+                    diffs.append(abs(sc_i[1 + n_in * new_pos + j]
+                                     - base_scores[1 + n_in * old_pos + j]))
             impact[i] = float(np.mean(diffs))
         rho = spearman(mass, impact)
         if rho is not None:
@@ -2179,7 +2325,7 @@ def probe_a2(args):
         best = sc0.max()
         idx = 0 if sc0[0] == best else int(sc0.argmax())
         if idx > 0:
-            ti = (idx - 1) // N_INSTR
+            ti = (idx - 1) // agent.n_instr
             target_ranks.append(
                 float((mass > mass[ti]).sum() + 1))  # 1 = most attended
     mean_rho = float(np.mean(rhos_impact)) if rhos_impact else float("nan")
@@ -2232,7 +2378,7 @@ def probe_a3(args):
             k = 0 if sc[0] == best else int(sc.argmax())
             if k == 0:
                 return ("NOOP", None)
-            i, j = divmod(k - 1, N_INSTR)
+            i, j = divmod(k - 1, agent.n_instr)
             return (order[i], j)
 
         base_choice = chosen(toks, cs_list)
@@ -2588,7 +2734,7 @@ def probe_a4v2(args):
                 last_issued=li)
             idx = aux["cand_idx"]
             if idx != 0 and getattr(agent, "mask_reissue", False):
-                i, j = divmod(idx - 1, N_INSTR)
+                i, j = divmod(idx - 1, agent.n_instr)
                 li[aux["callsigns"][i]] = j
             if aux["tokens"].shape[0] >= 2:
                 states.append(aux["tokens"])
@@ -2844,7 +2990,7 @@ def probe_c2(args):
                                               last_issued=li)
             idx = aux["cand_idx"]
             if idx != 0 and getattr(agent, "mask_reissue", False):
-                i, j = divmod(idx - 1, N_INSTR)
+                i, j = divmod(idx - 1, agent.n_instr)
                 li[aux["callsigns"][i]] = j
             return acts, idx != 0
         return continue_policy
@@ -2862,14 +3008,14 @@ def probe_c2(args):
         snap_s = sector_snapshot(env_s, obs_s.keys())
         toks = build_tokens(env_s, obs_s, None, cs_list)
         scores, cl, cu = _hurwicz_scores(agent, toks, c_pol)
-        n_cand = 1 + N_INSTR * len(cs_list)
+        n_cand = 1 + agent.n_instr * len(cs_list)   # the NET's candidates
         gts = []
         for k in range(n_cand):
             acts = noop_action(obs_s)
             issued = k != 0
             li0 = {}
             if issued:
-                i, j = divmod(k - 1, N_INSTR)
+                i, j = divmod(k - 1, agent.n_instr)
                 acts[cs_list[i]] = j + 1
                 li0[cs_list[i]] = j
             G, st, vio, dl = rollout_return(
@@ -2998,7 +3144,22 @@ def main():
     ap.add_argument("--a4v2_quick", action="store_true",
                     help="a4v2 selftest-lite: few states, 2-point ladder, "
                          "frozen probe-state file untouched")
+    ap.add_argument("--vertical_ramp", type=str, default="gate",
+                    choices=["gate", "smooth"],
+                    help="D5 conflict-pricing mode for EVERY probe "
+                         "(passed through to bcd.set_conflict_pricing; "
+                         "the mirrors import bcd's shaping_terms/"
+                         "sector_snapshot so they follow automatically). "
+                         "Default gate = 12c pricing.")
+    ap.add_argument("--delta_conflict", type=float, default=None,
+                    help="D5 DELTA_CONFLICT override (default: bcd's "
+                         "0.2; JK approved 0.5 for the smooth-ramp "
+                         "composite battery).")
     args = ap.parse_args()
+    # D5 amendment B: set the pricing BEFORE any probe/mirror runs and
+    # announce it per probe so the battery cannot silently run the wrong
+    # mode.
+    bcd.set_conflict_pricing(args.vertical_ramp, args.delta_conflict)
     sel = []
     for p in args.probe:
         if p == "all":
@@ -3016,8 +3177,12 @@ def main():
     results = []
     t_start = time.time()
     for p in sel:
+        # D5 amendment B: explicit per-probe pricing line (verification
+        # that no probe silently runs the wrong mode)
+        print(f"\n[{p}] {bcd.conflict_pricing_str()}")
         try:
             results.append(PROBES[p](args))
+            results[-1]["conflict_pricing"] = bcd.conflict_pricing_str()
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -3048,6 +3213,8 @@ def main():
     with open(out, "w") as f:
         json.dump(to_jsonable({"timestamp": time.strftime("%F %T"),
                                "probes_run": sel,
+                               "vertical_ramp": bcd.VERTICAL_RAMP,
+                               "delta_conflict": bcd.DELTA_CONFLICT,
                                "wall_seconds": round(time.time() - t_start),
                                "results": results}), f, indent=1)
     print(f"\nJSON written: {out}")
